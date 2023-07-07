@@ -42,3 +42,173 @@ Version 0.1 will be a Python program that implements the basic functions:
 * Log errors that come from the hydroponic manager
 * Provide a website frontend for viewing the data
 
+## Logger Structure Version 0.1
+
+This initial version of the logger structure is formatted with JSON. It might be
+inefficient in storage space, but that shouldn't matter in normal circumstances.
+If the ESP8266/ESP32 runs out of RAM and cannot dump its logs to a larger server,
+they could temporarily dump the logs to the 4MB flash memory.
+
+Note that each of the following JSON logs also include two common fields that are
+omitted in the examples. These are "time" and "msg", which hold the log's timestamp
+and readable message, respectively. The "time" field is a 64-bit timestamp. The
+"msg" field is a string with no required structure; this can be useful for manually
+reading the logs.
+
+There are 4 possible logging levels:
+
+* DEBUG
+* INFO
+* DATA
+* ERROR
+
+Most of them are self explanatory. The DATA level is used for events that can be useful
+for data graphs, such as ph pulses.
+
+### Pump Pulse
+
+One of the pumps (ph up/down or refill) was pulsed.
+
+```json
+{
+    "lvl": "DATA",
+    "type": "pump",
+    "pump": "ph-down",
+    "len": 1200,
+}
+```
+
+Values for "pump" are:
+
+* "ph-down"
+* "ph-up"
+* "refill"
+
+### Stabilize pH
+
+The pH sensor was read to determine whether the pH was in range and stabilize it with
+the pH pumps.
+
+```json
+{
+    "lvl": "INFO",
+    "type": "stabilize-ph",
+    "ph": 6.12,
+}
+```
+
+### System Disable
+
+The system was disabled/enabled.
+
+```json
+{
+    "lvl": "DATA",
+    "type": "system-toggle",
+    "enabled": true,
+}
+```
+
+### Overflow Sensor Activated
+
+```json
+{
+    "lvl": "DATA",
+    "type": "overflow",
+}
+```
+
+### HTTP Request
+
+A client made an HTTP request.
+
+NOTE: As there will be many HTTP requests, this will probably take up too much space.
+      It will likely be removed.
+
+```json
+{
+    "lvl": "INFO",
+    "type": "http-request",
+    "uri": "/read",
+    "response": 200,
+}
+```
+
+### Update Settings
+
+The settings were updated.
+
+```json
+{
+    "lvl": "INFO",
+    "type": "update-settings",
+    "settings": /* Settings struct here */,
+}
+```
+
+### Save Settings
+
+The settings were saved as defaults to flash memory.
+
+```json
+{
+    "lvl": "INFO",
+    "type": "save-settings",
+    "settings": /* Settings struct here */,
+}
+```
+
+### System Startup
+
+The system started up.
+
+```json
+{
+    "lvl": "INFO",
+    "type": "startup",
+}
+```
+
+### NTP Failure
+
+The time could not be retrieved from an NTP server.
+
+```json
+{
+    "lvl": "ERROR",
+    "type": "ntp",
+}
+```
+
+### pH Meter Setup Failure
+
+The pH meter failed to be setup.
+
+```json
+{
+    "lvl": "ERROR",
+    "type": "ph-meter-setup",
+}
+```
+
+### mDNS Failure
+
+mDNS failed to start.
+
+```json
+{
+    "lvl": "ERROR",
+    "type": "mDNS",
+}
+```
+
+### Failed to Load Settings
+
+The settings could not be loaded from flash.
+
+```json
+{
+    "lvl": "ERROR",
+    "type": "load-settings",
+}
+```
