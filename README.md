@@ -4,7 +4,8 @@ This set of software is used for managing a hydroponic system. This includes
 keeping a reservoir's pH in range, refilling a reservoir, and logging data
 and events via an HTTP server.
 
-Currently, there is a single program; an Arduino sketch that implements most of the basic hydroponic manager functions.
+Currently, there is a single program; an Arduino sketch that implements most of the basic
+hydroponic manager functions.
 
 ## Problems of Version 0.2
 
@@ -37,10 +38,20 @@ hydroponic manager and logs data and events in a database.
 
 Version 0.1 will be a Python program that implements the basic functions:
 
-* Log pH and PPM to database every X minutes
+* Log pH and PPM to SQL database every X minutes
 * Log events such as pH pump pulses or settings changes
 * Log errors that come from the hydroponic manager
 * Provide a website frontend for viewing the data
+
+All logs are currently structured in JSON. The hydro manager will keep a buffer for all
+recent logs. When requested via HTTP, it will send those logs to another server where
+they can be saved to a database.
+
+Every X minutes, the hydro logger will make two HTTP requests (maybe combine them?) to the
+hydro manager; one for the current data readings and another for the log buffer. It will
+then add these data points to a database.
+
+As a frontend, I plan to run a Highcharts website with graphs for each sensor.
 
 ## Logger Structure Version 0.1
 
