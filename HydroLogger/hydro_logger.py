@@ -1,5 +1,5 @@
-from flask import Flask
-import mysql.connector
+from flask import Flask, render_template
+import mysql.connector, datetime
 
 app = Flask(__name__)
 
@@ -12,8 +12,11 @@ DATABASE = 'testing'
 def root_page():
     return "<p>KEEP GOING</>"
 
+
 @app.route("/status")
 def status_page():
+    return render_template('status.html', timestamp=datetime.datetime.now(), ph=6.12)
+
     cnx = mysql.connector.connect(user=USER, password=PASSWORD,
                                   host=HOST, database=DATABASE)
     cursor = cnx.cursor()
