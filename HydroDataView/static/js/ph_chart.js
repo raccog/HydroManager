@@ -26,11 +26,6 @@ Highcharts.stockChart('container', {
         text: 'pH Over Time',
         align: 'left'
     },
-    subtitle: {
-        text: document.ontouchstart === undefined ?
-            'Click and drag in the plot area to zoom in' : 'Pinch the chart to zoom in',
-        align: 'left'
-    },
     xAxis: {
         type: 'datetime'
     },
