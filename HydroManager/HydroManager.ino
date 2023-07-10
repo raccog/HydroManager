@@ -134,7 +134,7 @@ const int DISABLED_LED = 0;
 const unsigned long PH_CHECK_INTERVAL_MIN = 30;
 const unsigned long PH_CHECK_INTERVAL_MAX = 12 * 60 * 60;
 const unsigned long PH_PUMP_DOSE_LENGTH_MIN = 200;
-const unsigned long PH_PUMP_DOSE_LENGTH_MAX = 2000;
+const unsigned long PH_PUMP_DOSE_LENGTH_MAX = 10000;
 const unsigned long REFILL_DOSE_LENGTH_MIN = 5;
 const unsigned long REFILL_DOSE_LENGTH_MAX = 70;
 
