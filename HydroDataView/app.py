@@ -67,37 +67,18 @@ def status_page():
     query = ("SELECT timestamp, sensor_reading FROM sensor_readings")
     cursor.execute(query)
 
-    data = []
-    flags = []
+    ph_data = []
+    ph_down = []
     i = 0
     for (timestamp, sensor_reading) in cursor:
+        # TODO: Remove these lines and add in the ph pump events
         if i == 5:
-            flags.append({'y': sensor_reading, 'x': timestamp.strftime('%s'), 'title': 'FLAG', 'text': 'PH'})
-        data.append([timestamp, sensor_reading])
+            ph_down.append(timestamp.timestamp() * 1000.0)
         i += 1
+
+        ph_data.append([timestamp.timestamp() * 1000.0, float(sensor_reading)])
     cursor.close()
     cnx.close()
-
-    series = highcharts.SplineSeries(name = "pH Over Time", data = data, id='phseries')
-    #flags = highcharts.FlagsSeries(name="pH Flags", data_labels=flags, on_series='phseries')
-
-    # Fuck this crap that does not work.
-    # For "some reason" the python library for highcharts consistently removes all of my flags' data points
-    # UGH... Find another way to use highchart or use another chart framework
-    options['series'] = [{
-        'type': 'flags',
-        'name': 'FLAGS',
-        'onSeries': 'phseries',
-        'data': flags,
-        'shape': 'flag',
-        'title': 'ph down'
-    }];
-
-    chart = highcharts.Chart.from_options(options, chart_kwargs={'is_stock_chart': True})
-    chart.container = 'container'
-    chart.add_series(series)
-
-    chart.to_js_literal(filename='static/js/test.js')
     
-    return render_template('status.html', chart_js=url_for('static', filename='js/test.js'))
+    return render_template('status.html', ph_data=ph_data, ph_down=ph_down)
 
