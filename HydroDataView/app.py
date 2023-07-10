@@ -1,3 +1,10 @@
+# Hydroponic Data View - Ryan Cohen, 2023
+# Version 0.1.0
+# 
+# This program serves a website that will be used to view the database in
+# charts and tables.
+#
+# Currently, nothing is displayed yet. The first view will be a pH chart.
 from flask import Flask, render_template
 import mysql.connector, datetime
 

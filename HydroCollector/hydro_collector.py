@@ -1,3 +1,13 @@
+# Hydroponic Data Collector - Ryan Cohen, 2023
+# Version 0.1.0
+# 
+# This is meant to be run as a cron script every 5 minutes.
+#
+# The script connects to a Hydro Manager and collects data from it. This data
+# is immediately logged into a MySQL database.
+#
+# Currently, it only collects basic pH data. In the future, it will also collect
+# other sensors, events, and logs.
 import mysql.connector, datetime, requests, sys
 
 
@@ -19,7 +29,7 @@ if __name__ == '__main__':
 
     req = requests.get(f'http://{ip}/api/read')
     json = req.json()
-    json['time'] += 14400    # temporary timestamp offset. FIX IN HYDRO MANAGER
+    json['time'] += 14400    # temporary timestamp offset to UTC. FIX IN HYDRO MANAGER
     json['time'] = datetime.datetime.fromtimestamp(json['time'])
     time = json['time']
     json['time'] = str(json['time'])
