@@ -2,13 +2,31 @@ Highcharts.stockChart('container', {
     chart: {
     },
     rangeSelector: {
-        selected: 2,
+        selected: 5,
         enabled: true,
         buttons: [{
             type: 'hour',
             count: 1,
             text: '1h',
             title: 'View 1 hour'
+        },
+        {
+            type: 'hour',
+            count: 3,
+            text: '3h',
+            title: 'View 3 hours'
+        },
+        {
+            type: 'hour',
+            count: 6,
+            text: '6h',
+            title: 'View 6 hours'
+        },
+        {
+            type: 'hour',
+            count: 12,
+            text: '12h',
+            title: 'View 12 hours'
         },
         {
             type: 'day',
