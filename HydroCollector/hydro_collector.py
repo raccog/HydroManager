@@ -27,16 +27,23 @@ if __name__ == '__main__':
 
     ip = sys.argv[1]
 
-    req = requests.get(f'http://{ip}/api/read')
+    req = requests.get(f'http://{ip}/json/mailbox.json')
     json = req.json()
     json['time'] += 14400    # temporary timestamp offset to UTC. FIX IN HYDRO MANAGER
     json['time'] = datetime.datetime.fromtimestamp(json['time'])
     time = json['time']
+
     json['time'] = str(json['time'])
     print(json)
 
     cnx = mysql.connector.connect(**CONFIG)
     cursor = cnx.cursor()
+
+    if 'pulse_events' in json:
+        for event in json['pulse_events']:
+            query = ("INSERT INTO pump_pulses (timestamp,pump_id,pulse_length,interrupted)"
+                     "VALUES (%s,%s,%s,%s)")
+            cursor.execute(query, (datetime.datetime.fromtimestamp(event['time'] + 14400), event['type'], event['len'], event['interrupt']))
 
     query = ("INSERT INTO sensor_readings (timestamp,sensor_id,sensor_reading,sensor_type_index) "
              "VALUES (%s,%s,%s,%s)")
