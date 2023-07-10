@@ -71,12 +71,16 @@ def status_page():
     ph_down = []
     i = 0
     for (timestamp, sensor_reading) in cursor:
+        # TODO: Find better way to convert timezones
+        # This is a hack to convert the timezone from UTC seconds to EST milliseconds
+        timestamp = (timestamp.timestamp() - 14400.0) * 1000.0
         # TODO: Remove these lines and add in the ph pump events
+        # A test to see if flags work on highcharts
         if i == 5:
-            ph_down.append(timestamp.timestamp() * 1000.0)
+            ph_down.append(timestamp)
         i += 1
 
-        ph_data.append([timestamp.timestamp() * 1000.0, float(sensor_reading)])
+        ph_data.append([timestamp, float(sensor_reading)])
     cursor.close()
     cnx.close()
     
