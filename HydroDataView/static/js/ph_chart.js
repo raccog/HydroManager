@@ -43,7 +43,10 @@ Highcharts.stockChart('container', {
                 enabled: true,
                 radius: 2.5
             },
-        }
+        },
+        flags: {
+            allowOverlapX: true,
+        },
     },
 
     series: [{
