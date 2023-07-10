@@ -1,5 +1,5 @@
 // Hydroponic Manager - Ryan Cohen, 2023
-// Version 0.2.2
+// Version 0.3.0
 //
 // Use 40mL per Liter of pH Up/Down mix
 //
@@ -32,6 +32,12 @@
 //  * I2C ADC module
 //  * PPM sensor
 //  * BME280 temp/humidity sensor
+//
+// Changelog:
+//
+// Version 0.3.0
+//  * Add '/json/mailbox.json' endpoint
+//  * Use a buffer to store recent pump pulse events
 
 #include <cmath>
 #include <limits.h>
@@ -88,6 +94,19 @@ struct Settings {
   uint32_t crc32;
 };
 
+enum PumpType {
+  PH_DOWN = 1,
+  PH_UP = 2,
+  REFILL = 3
+};
+
+struct PumpPulseEvent {
+  unsigned long timestamp;
+  enum PumpType type;
+  unsigned long length;
+  bool interrupted;
+};
+
 //---------------------
 // Constants
 //---------------------
@@ -142,6 +161,9 @@ const float PH_ACC = 0.2f;
 // Disable button delay
 const unsigned long DISABLE_DELAY = 5;
 
+// Size of the pump pulse event buffer
+const size_t MAX_PUMP_PULSE_EVENTS = 5;
+
 //---------------------
 // Global variables
 //---------------------
@@ -184,6 +206,11 @@ unsigned long lastDisable = 0;
 // Allow for temporary disabling of the entire system or just the status screen
 bool systemEnabled = true;
 bool statusDisplayEnabled = false;
+
+// Buffer of recent pump pulse events
+// TODO: Add a fallback in case the buffer fills up
+struct PumpPulseEvent recentPumpPulses[MAX_PUMP_PULSE_EVENTS];
+size_t numPulseEvents = 0;
 
 //---------------------
 // HTML files
@@ -309,17 +336,34 @@ void pulsePump(int pump, unsigned long len) {
   if (!systemEnabled || digitalRead(OVERFLOW_SENSOR) == HIGH) {
     return;
   }
+
+  bool interrupted = false;
   
   digitalWrite(pump, LOW);
-  for (unsigned long i = 0; i < len; ++i) {
+  unsigned long i;
+  for (i = 0; i < len; ++i) {
     // Disable pump if about to overflow
     if (digitalRead(OVERFLOW_SENSOR) == HIGH) {
       digitalWrite(pump, HIGH);
-      return;
+      interrupted = true;
+      break;
     }
     delay(1);
   }
   digitalWrite(pump, HIGH);
+
+  // Add to event buffer
+  struct PumpPulseEvent pulseEvent = {
+    .timestamp = timeClient.getEpochTime(),
+    .type = (pump == PUMP_PH_DOWN) ? PH_DOWN : PH_UP,
+    .length = i,
+    .interrupted = interrupted
+  };
+
+  if (numPulseEvents < MAX_PUMP_PULSE_EVENTS) {
+    recentPumpPulses[numPulseEvents] = pulseEvent;
+    numPulseEvents += 1;
+  }
 
   // LOGGER
   Serial.print(timeClient.getFormattedTime());
@@ -731,7 +775,7 @@ void httpHandlePulsePump() {
       
       if (!settings.autoPh) {
         // Pulse pump and send JSON to client
-        pulsePump(doc["pump"], doc["pulseLen"]);
+        pulsePump((doc["pump"] == 1) ? PUMP_PH_DOWN : PUMP_PH_UP, doc["pulseLen"]);
         char buffer[256 + 1];
         serializeJson(doc, &buffer, 256);
         server.send(200, "application/json", buffer);
@@ -746,6 +790,44 @@ void httpHandlePulsePump() {
   } else {
     server.send(500, "text/plain", "POST needs args pulseLen and pump");
   }
+  digitalWrite(LED_BUILTIN, HIGH);
+}
+
+// Sends the client the current pH in JSON
+void httpHandleJsonMailbox() {
+  // Ensure the system is not disabled
+  if (!systemEnabled) {
+    httpHandleUnavailable();
+    return;
+  }
+  
+  digitalWrite(LED_BUILTIN, LOW);
+  
+  // Create JSON
+  StaticJsonDocument<256> doc;
+  doc["time"] = timeClient.getEpochTime();
+  doc["ph"] = round(pH.read_ph() * 100.0) / 100.0;
+  for (size_t i = 0; i < numPulseEvents; ++i) {
+    struct PumpPulseEvent *event = &recentPumpPulses[i];
+    doc["pulse_events"][i]["time"] = event->timestamp;
+    doc["pulse_events"][i]["type"] = event->type;
+    doc["pulse_events"][i]["len"] = event->length;
+    doc["pulse_events"][i]["interrupt"] = event->interrupted;
+  }
+  
+  // Send JSON to client
+  char buffer[256 + 1];
+  serializeJson(doc, &buffer, 256);
+  server.send(200, "application/json", buffer);
+
+  // Clear buffer of recent events
+  numPulseEvents = 0;
+
+  // LOGGER
+  Serial.print("/json/mailbox.json: ");
+  serializeJson(doc, Serial);
+  Serial.println();
+  
   digitalWrite(LED_BUILTIN, HIGH);
 }
 
@@ -890,6 +972,7 @@ void setup() {
   server.on("/api/save_settings", HTTP_POST, httpHandleSaveSettings);
   server.on("/api/pulse", HTTP_POST, httpHandlePulsePump);
   server.on("/api/auto_pulse", HTTP_POST, httpHandleAutoPulsePump);
+  server.on("/json/mailbox.json", HTTP_GET, httpHandleJsonMailbox);
   server.onNotFound(httpHandleNotFound);
   server.begin();
   Serial.print(timeClient.getFormattedTime());
