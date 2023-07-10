@@ -10,8 +10,13 @@
     <script>
         const ph_data = {{ ph_data }};
         const ph_down = [
-            {% for timestamp in ph_down %}
-            {x: {{ timestamp }} },
+            {% for (timestamp, length) in ph_down %}
+            {x: {{ timestamp }}, text: '{{ length }} ms' },
+            {% endfor %}
+        ];
+        const ph_up = [
+            {% for (timestamp, length) in ph_up %}
+            {x: {{ timestamp }}, text: '{{ length }} ms' },
             {% endfor %}
         ];
     </script>

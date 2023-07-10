@@ -1,15 +1,26 @@
-/*const data = [[Date.UTC(2015, 1, 1), 6.21], [Date.UTC(2015, 1, 2), 6.25],
-            [Date.UTC(2015, 1, 3), 6.23],
-            [Date.UTC(2015, 1, 4), 6.23],
-            [Date.UTC(2015, 1, 5), 4.23],
-            [Date.UTC(2015, 1, 5), 4.23],
-            [Date.UTC(2015, 1, 6), 4.23],
-            [Date.UTC(2015, 1, 7), 4.23],
-            [Date.UTC(2015, 1, 8), 4.23],
-        ];*/
-Highcharts.chart('container', {
+Highcharts.stockChart('container', {
     chart: {
-        zoomType: 'x'
+    },
+    rangeSelector: {
+        selected: 2,
+        enabled: true,
+        buttons: [{
+            type: 'hour',
+            count: 1,
+            text: '1h',
+            title: 'View 1 hour'
+        },
+        {
+            type: 'day',
+            count: 1,
+            text: '1d',
+            title: 'View 1 day'
+        },
+        {
+            type: 'all',
+            text: 'All',
+            title: 'View all'
+        }]
     },
     title: {
         text: 'pH Over Time',
@@ -48,9 +59,17 @@ Highcharts.chart('container', {
     },
     {
         type: 'flags',
-        name: 'PH EVENTS',
+        name: 'pH Down Pump Pulses',
         data: ph_down,
-        title: 'PH DOWN',
+        title: 'pH Down',
         onSeries: 'phSeries',
-    }]
+    },
+    {
+        type: 'flags',
+        name: 'pH Up Pump Events',
+        data: ph_up,
+        title: 'pH Up',
+        onSeries: 'phSeries',
+    }
+    ]
 });

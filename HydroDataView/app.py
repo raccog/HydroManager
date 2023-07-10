@@ -68,21 +68,28 @@ def status_page():
     cursor.execute(query)
 
     ph_data = []
-    ph_down = []
-    i = 0
     for (timestamp, sensor_reading) in cursor:
         # TODO: Find better way to convert timezones
         # This is a hack to convert the timezone from UTC seconds to EST milliseconds
         timestamp = (timestamp.timestamp() - 14400.0) * 1000.0
-        # TODO: Remove these lines and add in the ph pump events
-        # A test to see if flags work on highcharts
-        if i == 5:
-            ph_down.append(timestamp)
-        i += 1
-
         ph_data.append([timestamp, float(sensor_reading)])
+
+    ph_down = []
+    ph_up = []
+    query = ("SELECT * FROM pump_pulses")
+    cursor.execute(query)
+    for (timestamp, pump_id, pulse_len, interrupted) in cursor:
+        # TODO: Find better way to convert timezones
+        # This is a hack to convert the timezone from UTC seconds to EST milliseconds
+        timestamp = (timestamp.timestamp() - 14400.0) * 1000.0
+        if pump_id == 1:
+            ph_down.append((timestamp, pulse_len))
+        elif pump_id == 2:
+            ph_up.append((timestamp, pulse_len))
+
+
     cursor.close()
     cnx.close()
     
-    return render_template('status.html', ph_data=ph_data, ph_down=ph_down)
+    return render_template('status.html', ph_data=ph_data, ph_down=ph_down, ph_up=ph_up)
 
