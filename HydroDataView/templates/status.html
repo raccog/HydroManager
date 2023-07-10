@@ -2,10 +2,11 @@
 <html>
 <head>
     <title>Current pH</title>
+    <script src="https://code.highcharts.com/stock/highstock.js"></script>
 </head>
 <body>
     <h1>Current pH</h1>
-    <h2>{{ timestamp }}</h2>
-    <p>{{ ph }} pH</p>
+    <div id="container" style="width:100%; height:400px;"></div>
+    <script src="{{ chart_js }}"></script>
 </body>
 </html>
