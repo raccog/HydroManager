@@ -23,7 +23,7 @@ enough pins for this. See the next section for more details.
 
 All of these will be added in version 1.0
 
-## Version 1.0 Plan
+# Hydroponic Manager Version 1.0 Plan
 
 This will be a large change, as I plan to switch the microcontroller from an ESP8266 to
 an ESP32. This gives the advantages of many more pins and also 2 cores instead of 1.
@@ -32,4 +32,22 @@ I also plan to move away from Arduino and use the Espressif ESP32 SDK instead. T
 require an entire rewrite of the hydroponic manager system. It will also require me to
 replace some libraries that don't work without Arduino; such as a JSON parser. I also
 plan to use an RTOS to prevent any one task from locking out the entire system.
+
+## Bill Of Materials
+
+Here is a list of all the hardware used for the HydroManager Version 1.0:
+
+* ESP32-WROOM Development Board
+* 12v DC Wall Adapter
+* 12v to 5v Buck Converter
+* USB-C Power Cable
+* 4-channel, 5v Relay Module
+* 3x 12v Diaphragm Water Pumps
+* ADS1115 4-channel ADC to I2C Module
+* Atlas Scientific Gravity Analog pH Kit (can also use the isolated pH board)
+* TDS Meter
+* 4x Water Level Sensors
+* Red LED + 330 Ohm Resistor
+* 2x Push Buttons
+* 128x64 Pixel OLED with SSD1306 Driver
 
