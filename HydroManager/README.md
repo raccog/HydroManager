@@ -242,3 +242,36 @@ size_t pump_event_cache_start = 0;
 size_t pump_event_cache_end = 0
 ```
 
+### Tasks
+
+Tasks will be managed by the FreeRTOS scheduler. Each task will either run on
+core0 or core1.
+
+#### Core 0
+
+* Stabilize pH
+* Refill Reservoir
+* Overflow Sensor Activated (ISR)
+* Receive IPC from Core 1
+
+IPC from core 1 can cause the following tasks:
+
+* Update settings from Core 1
+* Save settings to flash
+* Send sensor data to core 1
+* Send events to core 1
+* Send logs to core 1
+
+#### Core 1
+
+* Update RTC using NTP
+* System/Display Toggle Buttons (ISR)
+* Update Display
+* Check for HTTP requests
+
+Check for HTTP requests can cause the following tasks:
+
+* Send new settings to core 0
+* Tell core 0 to save settings to flash
+* Tell core 0 to send data/events/logs
+
