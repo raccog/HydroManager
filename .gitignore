@@ -1,5 +1,7 @@
 build/
 dist/
+sdkconfig*
+*.old
 *.egg-info/
 .venv/
 __pycache__/
