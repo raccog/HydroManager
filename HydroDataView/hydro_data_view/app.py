@@ -56,7 +56,7 @@ options = {
 
 @app.route("/")
 def root_page():
-    return "<p>KEEP GOING</>"
+    return "<p><a href='/status'>KEEP GOING</a></p>"
 
 
 @app.route("/status")

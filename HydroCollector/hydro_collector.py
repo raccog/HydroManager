@@ -15,7 +15,7 @@ CONFIG = {
     'user': 'root',
     'password': '',
     'host': '127.0.0.1',
-    'database': 'testing',
+    'database': 'HydroCollection',
     'raise_on_warnings': True
 }
 

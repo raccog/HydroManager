@@ -1,0 +1,2 @@
+recursive-include hydro_data_view/templates *
+recursive-include hydro_data_view/static *
