@@ -98,7 +98,7 @@ struct ManagerSettings {
 * `magic` - A constant to verify that the structure is valid. Currently `0xc0ffee15`.
 * `version` - The current structure version.
 * `auto_ph` - A boolean that is 1 when the system should automatically stabilize ph.
-* `refill_mode` - Has 3 options: Off, Refill, and Continuous.
+* `refill_mode` - Has 3 options: Off, Refill, and Circulate.
 * `ph_stabilize_interval` - Milliseconds between ph stabilization attempts.
 * `ph_dose_length` - Length of a single ph pump dose in milliseconds.
 * `refill_dose_length` - Length of a single refill pump dose in milliseconds.
@@ -170,6 +170,11 @@ const uint32_t PH_DOSE_MAX = 10000;         // 10 seconds
 const uint32_t REFILL_DOSE_MIN = 5000;      // 5 seconds
 const uint32_t REFILL_DOSE_MAX = 70000;     // 70 seconds
 
+// Refill Pump States
+#define REFILL_OFF 1
+#define REFILL_ON 2
+#define REFILL_CIRCULATE 3
+
 // Display Settings
 #define DISPLAY_WIDTH 128
 #define DISPLAY_HEIGHT 64
@@ -197,5 +202,43 @@ const float PH_STD_DEVIATION = 0.2f;
 
 // Forced millisecond delay between system/display toggles
 const uint32_t TOGGLE_DELAY = 5000; // 5 seconds
+```
+
+### Global Variables
+
+These global variables can be changed during runtime. Extra care needs to be taken
+when interacting with these variables.
+
+It should be ensured that when writing to any of these variables, the other core
+is not reading it at the same time. Some variables will be private for either
+core 0 or core 1.
+
+```c
+// Global system settings. These can be changed using an HTTP POST endpoint.
+// Core 0 cannot write to these settings.
+struct ManagerSettings system_settings {
+    .magic = SETTINGS_MAGIC,
+    .version = SETTINGS_VERSION,
+    .auto_ph = 1,
+    .refill_mode = REFILL_OFF,
+    .ph_stabilize_interval = 300000,    // 5 minutes
+    .ph_dose_length = 1000,             // 1 second
+    .refill_dose_length = 60000,        // 60 seconds
+    .crc32 = 0  // CRC32 needs to be calculated during setup
+};
+
+// Timers
+uint64_t last_ph_stabilize_attempt = 0;
+uint64_t last_system_toggle = 0;
+
+// On/Off State for Entire System
+bool system_enabled = true;
+// On/Off State for Status Display
+bool display_enabled = false;
+
+// Circular Buffer for Pump Events
+struct PumpPulseEvent pump_event_cache[PUMP_EVENT_BUFFER_LENGTH];
+size_t pump_event_cache_start = 0;
+size_t pump_event_cache_end = 0
 ```
 
