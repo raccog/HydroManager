@@ -58,6 +58,28 @@ by Espressif. With two cores on the ESP32, 1 will be used for the main sensor an
 tasks and the other will be used for the HTTP server, a status display, and connected
 to a few input buttons.
 
+### Pins
+
+The following pins are used as defaults. They will be able to be changed using
+the esp-idf menuconfig.
+
+* ADS1115 SDA: GPIO13 (I2C0)
+* ADS1115 SCL: GPIO12 (I2C0)
+* BME280 SDA: GPIO13 (I2C0)
+* BME280 SCL: GPIO12 (I2C0)
+* SSD1306 SDA: GPIO14 (I2C1)
+* SSD1306 SCL: GPIO27 (I2C1)
+* PUMP0 Relay: GPIO26
+* PUMP1 Relay: GPIO25
+* PUMP2 Relay: GPIO33
+* System Status LED: GPIO32
+* System Toggle Button: GPIO35
+* Display Toggle Buttoin: GPIO34
+* Overflow Sensor 0: GPIO15
+* Overflow Sensor 1: GPIO2
+* Refill Sensor: GPIO4
+* External Reservoir Sensor: GPIO16
+
 ### Types
 
 The following types have been declared for this program:
