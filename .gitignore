@@ -5,3 +5,4 @@ sdkconfig*
 *.egg-info/
 .venv/
 __pycache__/
+managed_components/

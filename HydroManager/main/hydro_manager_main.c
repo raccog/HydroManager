@@ -12,6 +12,7 @@
 #include <driver/i2c.h>
 #include <ads111x.h>
 #include <bmp280.h>
+#include "ssd1306.h"
 
 //------------------
 // Pin definitions
@@ -22,6 +23,12 @@
 #define I2C0_FREQ_HZ (100 * 1000) // 100kHz
 #define I2C0_SDA 26
 #define I2C0_SCL 27
+
+// I2C1 is used for display (SSD1306)
+#define I2C1_PORT 1
+#define I2C1_FREQ_HZ (100 * 1000) // 100kHz
+#define I2C1_SDA 23
+#define I2C1_SCL 22
 
 // I2C Address for ADS1115 when ADDR is connected to GND
 #define ADS1115_ADDR ADS111X_ADDR_GND
@@ -36,9 +43,21 @@
 
 // I2C used for sensors
 i2c_dev_t i2c0_dev = {0};
+// I2C used for display
+i2c_config_t i2c1_conf = {
+    .mode = I2C_MODE_MASTER,
+    .sda_io_num = I2C1_SDA,
+    .sda_pullup_en = GPIO_PULLUP_ENABLE,
+    .scl_io_num = I2C1_SCL,
+    .scl_pullup_en = GPIO_PULLUP_ENABLE,
+    .master.clk_speed = I2C1_FREQ_HZ,
+    .clk_flags = I2C_SCLK_SRC_FLAG_FOR_NOMAL
+};
 // BME280 temp/humidity/pressure sensor
 bmp280_t bme280_dev = {0};
 bmp280_params_t bme280_params = {0};
+// SSD1306 display
+ssd1306_handle_t ssd1306_dev = NULL;
 
 SemaphoreHandle_t printf_sem;
 
@@ -103,6 +122,7 @@ void initialize_hardware() {
 
     // Initialize I2C0
     ESP_ERROR_CHECK(i2cdev_init());
+    printf("I2C0 initialized.\n");
 
     // Initialize ADS1115 ADC module with the following configuration:
     //  * Single shot mode
@@ -116,14 +136,31 @@ void initialize_hardware() {
     ESP_ERROR_CHECK(ads111x_set_data_rate(&i2c0_dev, ADS111X_DATA_RATE_128));
     ESP_ERROR_CHECK(ads111x_set_input_mux(&i2c0_dev, ADS111X_MUX_0_GND));
     ESP_ERROR_CHECK(ads111x_set_gain(&i2c0_dev, ADS1115_GAIN));
+    printf("ADS1115 initialized.\n");
 
     // Initialize BME280 temp/humidity/pressure sensor
     ESP_ERROR_CHECK(bmp280_init_desc(&bme280_dev, BME280_ADDR, I2C0_PORT, I2C0_SDA,
                 I2C0_SCL));
     ESP_ERROR_CHECK(bmp280_init_default_params(&bme280_params));
     ESP_ERROR_CHECK(bmp280_init(&bme280_dev, &bme280_params));
+    printf("BME280 initialized.\n");
 
-    printf("ADS1115 initialized.\n");
+    // Initialize I2C1
+    ESP_ERROR_CHECK(i2c_param_config(I2C1_PORT, &i2c1_conf));
+    ESP_ERROR_CHECK(i2c_driver_install(I2C1_PORT, i2c1_conf.mode, 0, 0, 0));
+    printf("I2C1 initialized.\n");
+
+    // Initialize SSD1306 display
+    ssd1306_dev = ssd1306_create(I2C1_PORT, SSD1306_I2C_ADDRESS);
+    ESP_ERROR_CHECK(ssd1306_refresh_gram(ssd1306_dev));
+    ssd1306_clear_screen(ssd1306_dev, 0x00);
+    printf("SSD1306 initialized.\n");
+
+    // Test SSD1306 by displaying a string
+    char data_str[10] = {0};
+    sprintf(data_str, "C STR");
+    ssd1306_draw_string(ssd1306_dev, 70, 16, (const uint8_t *)data_str, 16, 1);
+    ESP_ERROR_CHECK(ssd1306_refresh_gram(ssd1306_dev));
 }
 
 void app_main(void)
