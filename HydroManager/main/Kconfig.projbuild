@@ -1,0 +1,18 @@
+menu "HydroManager"
+    menu "WiFi Configuration"
+        comment "WiFi Configuration"
+
+        config HYDRO_MANAGER_SSID
+            string "WiFi AP SSID"
+            default "myssid"
+            help
+                SSID (network name) of the AP for the HydroManager to connect to.
+
+        config HYDRO_MANAGER_PASSWORD
+            string "WiFi AP Password"
+            default "mypassword"
+            help
+                WiFi password of the AP for the HydroManager to connect to.
+    endmenu
+endmenu
+

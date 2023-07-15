@@ -7,12 +7,21 @@
 #include <stdio.h>
 #include <inttypes.h>
 #include <freertos/FreeRTOS.h>
+#include <freertos/event_groups.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
 #include <driver/i2c.h>
 #include <ads111x.h>
 #include <bmp280.h>
 #include "ssd1306.h"
+#include <nvs_flash.h>
+#include <esp_netif.h>
+#include <esp_event.h>
+#include <esp_log.h>
+#include <esp_wifi.h>
+
+//#include <esp_http_server.h>
+//#include <esp_system.h>
 
 //------------------
 // Pin definitions
@@ -59,7 +68,24 @@ bmp280_params_t bme280_params = {0};
 // SSD1306 display
 ssd1306_handle_t ssd1306_dev = NULL;
 
+// FreeRTOS handles
 SemaphoreHandle_t printf_sem;
+// FreeRTOS event group to signal when we are connected
+EventGroupHandle_t g_wifi_event_group;
+
+/* The event group allows multiple bits for each event, but we only care about two events:
+ * - we are connected to the AP with an IP
+ * - we failed to connect after the maximum amount of retries */
+#define WIFI_CONNECTED_BIT BIT0
+#define WIFI_FAIL_BIT      BIT1
+
+#define WIFI_SSID CONFIG_HYDRO_MANAGER_SSID
+#define WIFI_PASSWORD CONFIG_HYDRO_MANAGER_PASSWORD
+
+// Current number of WiFi connection attempts
+int g_wifi_retried = 0;
+// Max number of WiFi connection attempts
+#define MAX_WIFI_RETRIES 10
 
 #define TASK_PRINTF(...) \
 { \
@@ -67,6 +93,8 @@ SemaphoreHandle_t printf_sem;
     printf(__VA_ARGS__); \
     xSemaphoreGive(printf_sem); \
 }
+
+const char *TAG = "HydroManager";
 
 float ads1115_read(int mux) {
     if (mux < 0 || mux > 3) {
@@ -113,11 +141,86 @@ void core1_loop(void *pvParameters) {
     }
 }
 
+void handle_wifi_got_ip(void *arg, esp_event_base_t event_base,
+        int32_t event_id, void *event_data) {
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
+        esp_wifi_connect();
+    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        if (g_wifi_retried < MAX_WIFI_RETRIES) {
+            esp_wifi_connect();
+            g_wifi_retried += 1;
+            TASK_PRINTF("Retry to connect to the AP.\n");
+        } else {
+            xEventGroupSetBits(g_wifi_event_group, WIFI_FAIL_BIT);
+        }
+    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
+        ESP_LOGI(TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
+        g_wifi_retried = 0;
+        xEventGroupSetBits(g_wifi_event_group, WIFI_CONNECTED_BIT);
+    }
+}
+
 void initialize_hardware() {
     // Initialize printf semaphore
     printf_sem = xSemaphoreCreateBinary();
     if (printf_sem == NULL) {
         printf("Failed to create printf semaphore\n");
+    }
+
+    // Initialize WiFi event group
+    g_wifi_event_group = xEventGroupCreate();
+
+    // Initialize flash storage
+    ESP_ERROR_CHECK(nvs_flash_init());
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    esp_netif_create_default_wifi_sta();
+
+    // Init WiFi
+    // Taken from ESP-IDF getting started station example:
+    // https://github.com/espressif/esp-idf/blob/4fc2e5cb95abb1e7339f11929bc9e916a9c3d15a/examples/wifi/getting_started/station/main/station_example_main.c
+    wifi_init_config_t wifi_init_config = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&wifi_init_config));
+
+    // Setup WiFi event handlers
+    esp_event_handler_instance_t instance_any_id;
+    esp_event_handler_instance_t instance_got_ip;
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
+                ESP_EVENT_ANY_ID, &handle_wifi_got_ip, NULL,
+                &instance_any_id));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
+                IP_EVENT_STA_GOT_IP, &handle_wifi_got_ip, NULL,
+                &instance_got_ip));
+
+    // Connect to WiFi
+    wifi_config_t wifi_config = {
+        .sta = {
+            .ssid = WIFI_SSID,
+            .password = WIFI_PASSWORD,
+        }
+    };
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_start());
+
+    printf("WiFi initialized.\n");
+    /* Waiting until either the connection is established (WIFI_CONNECTED_BIT) or connection failed for the maximum
+     * number of re-tries (WIFI_FAIL_BIT). The bits are set by event_handler() (see above) */
+    EventBits_t bits = xEventGroupWaitBits(g_wifi_event_group,
+            WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
+            pdFALSE,
+            pdFALSE,
+            portMAX_DELAY);
+
+    /* xEventGroupWaitBits() returns the bits before the call returned, hence we can test which event actually
+     * happened. */
+    if (bits & WIFI_CONNECTED_BIT) {
+        ESP_LOGI(TAG, "connected to ap");
+    } else if (bits & WIFI_FAIL_BIT) {
+        ESP_LOGI(TAG, "Failed to connect to ap");
+    } else {
+        ESP_LOGE(TAG, "UNEXPECTED EVENT");
     }
 
     // Initialize I2C0
