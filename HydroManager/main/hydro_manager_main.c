@@ -19,8 +19,8 @@
 #include <esp_event.h>
 #include <esp_log.h>
 #include <esp_wifi.h>
+#include <esp_http_server.h>
 
-//#include <esp_http_server.h>
 //#include <esp_system.h>
 
 //------------------
@@ -152,6 +152,34 @@ void handle_wifi_got_ip(void *arg, esp_event_base_t event_base,
     }
 }
 
+esp_err_t handle_http_api_readings(httpd_req_t *req) {
+    ESP_LOGI(TAG, "/api/readings.json");
+    const char resp[] = "URI RESPONSE";
+    httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+static const httpd_uri_t http_api_readings = {
+    .uri = "/api/readings.json",
+    .method = HTTP_GET,
+    .handler = handle_http_api_readings,
+    .user_ctx = NULL
+};
+
+httpd_handle_t start_http_server() {
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+
+    httpd_handle_t server = NULL;
+
+    // Start http server
+    ESP_ERROR_CHECK(httpd_start(&server, &config));
+    httpd_register_uri_handler(server, &http_api_readings);
+
+    ESP_LOGI(TAG, "HTTP server started.");
+
+    return server;
+}
+
 void initialize_hardware() {
     // Initialize WiFi event group
     g_wifi_event_group = xEventGroupCreate();
@@ -202,6 +230,7 @@ void initialize_hardware() {
      * happened. */
     if (bits & WIFI_CONNECTED_BIT) {
         ESP_LOGI(TAG, "connected to ap");
+        httpd_handle_t server = start_http_server();
     } else if (bits & WIFI_FAIL_BIT) {
         ESP_LOGI(TAG, "Failed to connect to ap");
     } else {
