@@ -68,8 +68,6 @@ bmp280_params_t bme280_params = {0};
 // SSD1306 display
 ssd1306_handle_t ssd1306_dev = NULL;
 
-// FreeRTOS handles
-SemaphoreHandle_t printf_sem;
 // FreeRTOS event group to signal when we are connected
 EventGroupHandle_t g_wifi_event_group;
 
@@ -87,18 +85,11 @@ int g_wifi_retried = 0;
 // Max number of WiFi connection attempts
 #define MAX_WIFI_RETRIES 10
 
-#define TASK_PRINTF(...) \
-{ \
-    xSemaphoreTake(printf_sem, pdMS_TO_TICKS(1000)); \
-    printf(__VA_ARGS__); \
-    xSemaphoreGive(printf_sem); \
-}
-
 const char *TAG = "HydroManager";
 
 float ads1115_read(int mux) {
     if (mux < 0 || mux > 3) {
-        TASK_PRINTF("ads1115_read: invalid mux (%d)\n", mux);
+        ESP_LOGE(TAG, "ads1115_read: invalid mux (%d)", mux);
     }
 
     // Start conversion with selected mux
@@ -116,19 +107,19 @@ float ads1115_read(int mux) {
     ESP_ERROR_CHECK(ads111x_get_value(&i2c0_dev, &raw));
     float voltage = ads111x_gain_values[ADS1115_GAIN] / ADS111X_MAX_VALUE * raw;
 
-    TASK_PRINTF("ADS1115 A%d: raw (%d), %.04f volts\n", mux, raw, voltage);
+    ESP_LOGI(TAG, "ADS1115 A%d: raw (%d), %.04f volts", mux, raw, voltage);
 
     return voltage;
 }
 
 void core0_loop(void *pvParameters) {
     for (;;) {
-        ads1115_read(0);
-        ads1115_read(1);
-        float pressure, temp, humidity;
-        ESP_ERROR_CHECK(bmp280_read_float(&bme280_dev, &temp, &pressure, &humidity));
-        TASK_PRINTF("T: %.2f C, P: %.2f Pa, H: %.2f %%\n", temp, pressure, humidity);
-        TASK_PRINTF("-----------------------------\n");
+        //ads1115_read(0);
+        //ads1115_read(1);
+        //float pressure, temp, humidity;
+        //ESP_ERROR_CHECK(bmp280_read_float(&bme280_dev, &temp, &pressure, &humidity));
+        //TASK_PRINTF("T: %.2f C, P: %.2f Pa, H: %.2f %%\n", temp, pressure, humidity);
+        //TASK_PRINTF("-----------------------------\n");
         vTaskDelay(pdMS_TO_TICKS(500));
     }
 }
@@ -149,7 +140,7 @@ void handle_wifi_got_ip(void *arg, esp_event_base_t event_base,
         if (g_wifi_retried < MAX_WIFI_RETRIES) {
             esp_wifi_connect();
             g_wifi_retried += 1;
-            TASK_PRINTF("Retry to connect to the AP.\n");
+            ESP_LOGI(TAG, "Retry to connect to the AP.");
         } else {
             xEventGroupSetBits(g_wifi_event_group, WIFI_FAIL_BIT);
         }
@@ -162,12 +153,6 @@ void handle_wifi_got_ip(void *arg, esp_event_base_t event_base,
 }
 
 void initialize_hardware() {
-    // Initialize printf semaphore
-    printf_sem = xSemaphoreCreateBinary();
-    if (printf_sem == NULL) {
-        printf("Failed to create printf semaphore\n");
-    }
-
     // Initialize WiFi event group
     g_wifi_event_group = xEventGroupCreate();
 
@@ -204,7 +189,7 @@ void initialize_hardware() {
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    printf("WiFi initialized.\n");
+    ESP_LOGI(TAG, "WiFi initialized.");
     /* Waiting until either the connection is established (WIFI_CONNECTED_BIT) or connection failed for the maximum
      * number of re-tries (WIFI_FAIL_BIT). The bits are set by event_handler() (see above) */
     EventBits_t bits = xEventGroupWaitBits(g_wifi_event_group,
@@ -225,7 +210,7 @@ void initialize_hardware() {
 
     // Initialize I2C0
     ESP_ERROR_CHECK(i2cdev_init());
-    printf("I2C0 initialized.\n");
+    ESP_LOGI(TAG, "I2C0 initialized.");
 
     // Initialize ADS1115 ADC module with the following configuration:
     //  * Single shot mode
@@ -239,25 +224,25 @@ void initialize_hardware() {
     ESP_ERROR_CHECK(ads111x_set_data_rate(&i2c0_dev, ADS111X_DATA_RATE_128));
     ESP_ERROR_CHECK(ads111x_set_input_mux(&i2c0_dev, ADS111X_MUX_0_GND));
     ESP_ERROR_CHECK(ads111x_set_gain(&i2c0_dev, ADS1115_GAIN));
-    printf("ADS1115 initialized.\n");
+    ESP_LOGI(TAG, "ADS1115 initialized.");
 
     // Initialize BME280 temp/humidity/pressure sensor
     ESP_ERROR_CHECK(bmp280_init_desc(&bme280_dev, BME280_ADDR, I2C0_PORT, I2C0_SDA,
                 I2C0_SCL));
     ESP_ERROR_CHECK(bmp280_init_default_params(&bme280_params));
     ESP_ERROR_CHECK(bmp280_init(&bme280_dev, &bme280_params));
-    printf("BME280 initialized.\n");
+    ESP_LOGI(TAG, "BME280 initialized.");
 
     // Initialize I2C1
     ESP_ERROR_CHECK(i2c_param_config(I2C1_PORT, &i2c1_conf));
     ESP_ERROR_CHECK(i2c_driver_install(I2C1_PORT, i2c1_conf.mode, 0, 0, 0));
-    printf("I2C1 initialized.\n");
+    ESP_LOGI(TAG, "I2C1 initialized.");
 
     // Initialize SSD1306 display
     ssd1306_dev = ssd1306_create(I2C1_PORT, SSD1306_I2C_ADDRESS);
     ESP_ERROR_CHECK(ssd1306_refresh_gram(ssd1306_dev));
     ssd1306_clear_screen(ssd1306_dev, 0x00);
-    printf("SSD1306 initialized.\n");
+    ESP_LOGI(TAG, "SSD1306 initialized.");
 
     // Test SSD1306 by displaying a string
     char data_str[10] = {0};
