@@ -47,6 +47,21 @@
 // I2C address for BME280 when SDO is connected to GND
 #define BME280_ADDR BMP280_I2C_ADDRESS_0
 
+/* The event group allows multiple bits for each event, but we only care about two events:
+ * - we are connected to the AP with an IP
+ * - we failed to connect after the maximum amount of retries */
+#define WIFI_CONNECTED_BIT BIT0
+#define WIFI_FAIL_BIT      BIT1
+
+#define WIFI_SSID CONFIG_HYDRO_MANAGER_SSID
+#define WIFI_PASSWORD CONFIG_HYDRO_MANAGER_PASSWORD
+
+// Max number of WiFi connection attempts
+#define MAX_WIFI_RETRIES 10
+
+// Max number of HTTP requests that can be handled at once
+#define MAX_ASYNC_REQUESTS 2
+
 // Stack size for each task
 #define STACK_SIZE 2048
 
@@ -71,21 +86,100 @@ ssd1306_handle_t ssd1306_dev = NULL;
 // FreeRTOS event group to signal when we are connected
 EventGroupHandle_t g_wifi_event_group;
 
-/* The event group allows multiple bits for each event, but we only care about two events:
- * - we are connected to the AP with an IP
- * - we failed to connect after the maximum amount of retries */
-#define WIFI_CONNECTED_BIT BIT0
-#define WIFI_FAIL_BIT      BIT1
-
-#define WIFI_SSID CONFIG_HYDRO_MANAGER_SSID
-#define WIFI_PASSWORD CONFIG_HYDRO_MANAGER_PASSWORD
-
 // Current number of WiFi connection attempts
 int g_wifi_retried = 0;
-// Max number of WiFi connection attempts
-#define MAX_WIFI_RETRIES 10
 
 const char *TAG = "HydroManager";
+
+// Much of this code is based off the examples in https://github.com/espressif/esp-idf/tree/master/examples
+//
+// * Wifi connection - https://github.com/espressif/esp-idf/blob/4fc2e5cb95/examples/wifi/getting_started/station/main/station_example_main.c
+// * HTTP server - https://github.com/espressif/esp-idf/blob/master/examples/protocols/http_server/async_handlers/main/main.c
+
+void wifi_system_event_handler(void *arg, esp_event_base_t event_base,
+        int32_t event_id, void *event_data) {
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
+        // Connect to AP when WiFi station has started
+        esp_wifi_connect();
+    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        // Try to reconnect to WiFi when it disconnects
+        if (g_wifi_retried < MAX_WIFI_RETRIES) {
+            esp_wifi_connect();
+            g_wifi_retried += 1;
+            ESP_LOGI(TAG, "Trying to reconnect to AP");
+        } else {
+            // Signal if WiFi fails to disconnect many times in a row
+            xEventGroupSetBits(g_wifi_event_group, WIFI_FAIL_BIT);
+        }
+        ESP_LOGI(TAG, "Failed to reconnect to the AP");
+    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        // Signal if IP address was assigned
+        ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
+        ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
+        g_wifi_retried = 0;
+        xEventGroupSetBits(g_wifi_event_group, WIFI_CONNECTED_BIT);
+    }
+}
+
+// Returns true if WiFi initialized successfully
+// TODO: Find better way to signal if device is currently connected to WiFi AP
+bool wifi_init() {
+    // Initialize WiFi event group
+    g_wifi_event_group = xEventGroupCreate();
+
+    // Initialize networking stack
+    ESP_ERROR_CHECK(esp_netif_init());
+
+    // Start default event loop for system events
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+    // Start default WiFi station
+    esp_netif_create_default_wifi_sta();
+
+    // Initialize WiFi
+    wifi_init_config_t init_config = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&init_config));
+
+    // Register WiFi system event handlers
+    esp_event_handler_instance_t instance_any_id;
+    esp_event_handler_instance_t instance_got_ip;
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
+                ESP_EVENT_ANY_ID, &wifi_system_event_handler, NULL,
+                &instance_any_id));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
+                IP_EVENT_STA_GOT_IP, &wifi_system_event_handler, NULL,
+                &instance_got_ip));
+
+    // Finish initializing WiFi station
+    wifi_config_t wifi_config = {
+        .sta = {
+            .ssid = WIFI_SSID,
+            .password = WIFI_PASSWORD
+        }
+    };
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_start());
+    ESP_LOGI(TAG, "WiFi station initialized");
+
+    // Wait for AP to assign IP
+    EventBits_t bits = xEventGroupWaitBits(g_wifi_event_group,
+            WIFI_CONNECTED_BIT | WIFI_FAIL_BIT, pdFALSE, pdFALSE,
+            portMAX_DELAY);
+
+    /* xEventGroupWaitBits() returns the bits before the call returned, hence we can test which event actually
+     * happened. */
+    if (bits & WIFI_CONNECTED_BIT) {
+        ESP_LOGI(TAG, "Connected to AP");
+        return true;
+    } else if (bits & WIFI_FAIL_BIT) {
+        ESP_LOGI(TAG, "Failed to connect to AP");
+        return false;
+    } else {
+        ESP_LOGE(TAG, "UNEXPECTED EVENT");
+        return false;
+    }
+}
 
 float ads1115_read(int mux) {
     if (mux < 0 || mux > 3) {
@@ -132,26 +226,6 @@ void core1_loop(void *pvParameters) {
     }
 }
 
-void handle_wifi_got_ip(void *arg, esp_event_base_t event_base,
-        int32_t event_id, void *event_data) {
-    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
-    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        if (g_wifi_retried < MAX_WIFI_RETRIES) {
-            esp_wifi_connect();
-            g_wifi_retried += 1;
-            ESP_LOGI(TAG, "Retry to connect to the AP.");
-        } else {
-            xEventGroupSetBits(g_wifi_event_group, WIFI_FAIL_BIT);
-        }
-    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
-        ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
-        ESP_LOGI(TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
-        g_wifi_retried = 0;
-        xEventGroupSetBits(g_wifi_event_group, WIFI_CONNECTED_BIT);
-    }
-}
-
 esp_err_t handle_http_api_readings(httpd_req_t *req) {
     ESP_LOGI(TAG, "/api/readings.json");
     const char resp[] = "URI RESPONSE";
@@ -159,21 +233,30 @@ esp_err_t handle_http_api_readings(httpd_req_t *req) {
     return ESP_OK;
 }
 
-static const httpd_uri_t http_api_readings = {
-    .uri = "/api/readings.json",
-    .method = HTTP_GET,
-    .handler = handle_http_api_readings,
-    .user_ctx = NULL
-};
-
 httpd_handle_t start_http_server() {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
 
     httpd_handle_t server = NULL;
 
+    // From https://github.com/espressif/esp-idf/blob/master/examples/protocols/http_server/async_handlers/main/main.c
+    // It is advisable that httpd_config_t->max_open_sockets > MAX_ASYNC_REQUESTS
+    // Why? This leaves at least one socket still available to handle
+    // quick synchronous requests. Otherwise, all the sockets will
+    // get taken by the long async handlers, and your server will no
+    // longer be responsive.
+    config.max_open_sockets = MAX_ASYNC_REQUESTS + 1;
+
     // Start http server
     ESP_ERROR_CHECK(httpd_start(&server, &config));
-    httpd_register_uri_handler(server, &http_api_readings);
+
+    const httpd_uri_t api_readings_uri = {
+        .uri = "/api/readings.json",
+        .method = HTTP_GET,
+        .handler = handle_http_api_readings,
+    };
+
+    // Register URI handlers
+    httpd_register_uri_handler(server, &api_readings_uri);
 
     ESP_LOGI(TAG, "HTTP server started.");
 
@@ -181,61 +264,12 @@ httpd_handle_t start_http_server() {
 }
 
 void initialize_hardware() {
-    // Initialize WiFi event group
-    g_wifi_event_group = xEventGroupCreate();
-
     // Initialize flash storage
     ESP_ERROR_CHECK(nvs_flash_init());
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_create_default_wifi_sta();
 
-    // Init WiFi
-    // Taken from ESP-IDF getting started station example:
-    // https://github.com/espressif/esp-idf/blob/4fc2e5cb95abb1e7339f11929bc9e916a9c3d15a/examples/wifi/getting_started/station/main/station_example_main.c
-    wifi_init_config_t wifi_init_config = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&wifi_init_config));
-
-    // Setup WiFi event handlers
-    esp_event_handler_instance_t instance_any_id;
-    esp_event_handler_instance_t instance_got_ip;
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
-                ESP_EVENT_ANY_ID, &handle_wifi_got_ip, NULL,
-                &instance_any_id));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
-                IP_EVENT_STA_GOT_IP, &handle_wifi_got_ip, NULL,
-                &instance_got_ip));
-
-    // Connect to WiFi
-    wifi_config_t wifi_config = {
-        .sta = {
-            .ssid = WIFI_SSID,
-            .password = WIFI_PASSWORD,
-        }
-    };
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
-    ESP_ERROR_CHECK(esp_wifi_start());
-
-    ESP_LOGI(TAG, "WiFi initialized.");
-    /* Waiting until either the connection is established (WIFI_CONNECTED_BIT) or connection failed for the maximum
-     * number of re-tries (WIFI_FAIL_BIT). The bits are set by event_handler() (see above) */
-    EventBits_t bits = xEventGroupWaitBits(g_wifi_event_group,
-            WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
-            pdFALSE,
-            pdFALSE,
-            portMAX_DELAY);
-
-    /* xEventGroupWaitBits() returns the bits before the call returned, hence we can test which event actually
-     * happened. */
-    if (bits & WIFI_CONNECTED_BIT) {
-        ESP_LOGI(TAG, "connected to ap");
-        httpd_handle_t server = start_http_server();
-    } else if (bits & WIFI_FAIL_BIT) {
-        ESP_LOGI(TAG, "Failed to connect to ap");
-    } else {
-        ESP_LOGE(TAG, "UNEXPECTED EVENT");
-    }
+    // Initialize WiFi; blocks until IP is assigned
+    // TODO: How should this system function when disconnected from WiFi?
+    bool wifi_connected = wifi_init();
 
     // Initialize I2C0
     ESP_ERROR_CHECK(i2cdev_init());
@@ -278,6 +312,12 @@ void initialize_hardware() {
     sprintf(data_str, "C STR");
     ssd1306_draw_string(ssd1306_dev, 70, 16, (const uint8_t *)data_str, 16, 1);
     ESP_ERROR_CHECK(ssd1306_refresh_gram(ssd1306_dev));
+
+    // Start HTTP server if connected to WiFi
+    if (wifi_connected) {
+        ESP_LOGI(TAG, "Starting HTTP server");
+        httpd_handle_t _server = start_http_server();
+    }
 }
 
 void app_main(void)
