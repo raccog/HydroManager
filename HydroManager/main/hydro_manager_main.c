@@ -92,6 +92,15 @@ struct SystemResponse {
 // Constants
 //---------------
 
+// Auto ph mode values
+#define AUTO_PH_OFF 0
+#define AUTO_PH_ON 1
+
+// Refill mode values
+#define REFILL_OFF 0
+#define REFILL_ON 1
+#define REFILL_CIRCULATE 2
+
 // Local timezone
 #define TIMEZONE "EST5EDT" 
 
@@ -151,6 +160,20 @@ bmp280_t bme280_dev = {0};
 bmp280_params_t bme280_params = {0};
 // SSD1306 display
 ssd1306_handle_t ssd1306_dev = NULL;
+
+// Global system settings
+struct SystemSettings g_system_settings = {
+    .magic = 0xc0ffee15,
+    .version = {
+        .major = 1,
+        .minor = 0
+    },
+    .auto_ph = AUTO_PH_ON,
+    .refill_mode = REFILL_OFF,
+    .ph_stabilize_interval = 30 * 60 * 1000,    // 30 minutes
+    .ph_dose_length = 1000,                     // 1 second
+    .refill_dose_length = 30 * 1000             // 30 seconds
+};
 
 // FreeRTOS event group to signal when we are connected
 EventGroupHandle_t g_wifi_event_group;
@@ -319,9 +342,10 @@ esp_err_t handle_http_api_readings(httpd_req_t *req) {
     }
 
     struct SensorReading *reading = &response.reading;
-    sprintf(g_json_buffer, "{\"ph\":%.2f,\"tds\":%lu,\"temp\":%.1f,\"humidity\":%.1f}",
-            reading->ph, reading->tds, reading->temp, reading->humidity);
+    sprintf(g_json_buffer, "{\"time\":%llu,\"ph\":%.2f,\"tds\":%lu,\"temp\":%.1f,\"humidity\":%.1f}",
+            time(NULL), reading->ph, reading->tds, reading->temp, reading->humidity);
 
+    httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, g_json_buffer, HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }
