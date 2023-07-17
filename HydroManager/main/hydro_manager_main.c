@@ -6,6 +6,7 @@
 
 #include <stdio.h>
 #include <inttypes.h>
+#include <time.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
 #include <freertos/semphr.h>
@@ -16,6 +17,7 @@
 #include "ssd1306.h"
 #include <nvs_flash.h>
 #include <esp_netif.h>
+#include <esp_netif_sntp.h>
 #include <esp_event.h>
 #include <esp_log.h>
 #include <esp_wifi.h>
@@ -84,6 +86,15 @@ typedef struct {
 //---------------
 // Constants
 //---------------
+
+// Local timezone
+#define TIMEZONE "EST5EDT" 
+
+// NTP server address
+#define NTP_SERVER_ADDR "pool.ntp.org"
+
+// Timeout when waiting for NTP response
+#define NTP_TIMEOUT (pdMS_TO_TICKS(10000))
 
 // I2C Address for ADS1115 when ADDR is connected to GND
 #define ADS1115_ADDR ADS111X_ADDR_GND
@@ -339,8 +350,29 @@ esp_err_t stop_http_server(httpd_handle_t server) {
     return httpd_stop(server);
 }
 
-void http_connect_handler(void *arg, esp_event_base_t event_base,
+void refresh_sntp() {
+    // Connect to SNTP server
+    if (esp_netif_sntp_sync_wait(NTP_TIMEOUT) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to get system time from SNTP server");
+        return;
+    }
+
+    time_t timestamp;
+    time(&timestamp);
+    char strftime_buf[64];
+    struct tm timeinfo;
+
+    localtime_r(&timestamp, &timeinfo);
+    strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
+    ESP_LOGI(TAG, "Datetime: %s", strftime_buf);
+}
+
+void wifi_connect_handler(void *arg, esp_event_base_t event_base,
         int32_t event_id, void *event_data) {
+    // Get time from SNTP server
+    refresh_sntp();
+
+    // Start HTTP server
     httpd_handle_t *server = (httpd_handle_t *)arg;
     if (*server == NULL) {
         ESP_LOGI(TAG, "Starting HTTP server");
@@ -348,7 +380,7 @@ void http_connect_handler(void *arg, esp_event_base_t event_base,
     }
 }
 
-void http_disconnect_handler(void *arg, esp_event_base_t event_base,
+void wifi_disconnect_handler(void *arg, esp_event_base_t event_base,
         int32_t event_id, void *event_data) {
     httpd_handle_t *server = (httpd_handle_t *)arg;
     if (*server) {
@@ -458,9 +490,16 @@ void initialize_hardware() {
     // disconnects
     httpd_handle_t http_server;
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
-                &http_connect_handler, &http_server));
+                &wifi_connect_handler, &http_server));
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED,
-                &http_disconnect_handler, &http_server));
+                &wifi_disconnect_handler, &http_server));
+
+    // Get initial time from SNTP server
+    esp_sntp_config_t sntp_config = ESP_NETIF_SNTP_DEFAULT_CONFIG(NTP_SERVER_ADDR);
+    setenv("TZ", TIMEZONE, 1);
+    tzset();
+    ESP_ERROR_CHECK(esp_netif_sntp_init(&sntp_config));
+    refresh_sntp();
 
     // Initialize HTTP server for the first time
     http_server = start_http_server();
@@ -468,7 +507,9 @@ void initialize_hardware() {
 
 void core0_loop(void *pvParameters) {
     for (;;) {
+        // Check for system command
         if (uxQueueMessagesWaiting(g_system_command_queue) > 0) {
+            // Try to get command from queue
             SystemCommand cmd;
             const TickType_t timeout = 10;
             if (xQueueReceive(g_system_command_queue, &cmd, timeout) == pdFALSE) {
@@ -478,6 +519,7 @@ void core0_loop(void *pvParameters) {
 
             ESP_LOGI(TAG, "Received system command");
 
+            // Handle command
             switch (cmd.cmd_type) {
                 case CMD_READING_REQUEST:
                     system_send_reading();
@@ -492,18 +534,9 @@ void core0_loop(void *pvParameters) {
     }
 }
 
-void core1_loop(void *pvParameters) {
-    TickType_t lastWakeTime = xTaskGetTickCount();
-    for (;;) {
-        //TASK_PRINTF("Goodbye core %d!\n", xPortGetCoreID());
-        vTaskDelayUntil(&lastWakeTime, pdMS_TO_TICKS(1000));
-    }
-}
-
 void app_main(void)
 {
     initialize_hardware();
 
     xTaskCreatePinnedToCore(&core0_loop, "core0_loop", STACK_SIZE, NULL, 1, NULL, 0);
-    xTaskCreatePinnedToCore(&core1_loop, "core1_loop", STACK_SIZE, NULL, 1, NULL, 1);
 }
