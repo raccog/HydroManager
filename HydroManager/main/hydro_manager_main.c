@@ -23,6 +23,48 @@
 
 //#include <esp_system.h>
 
+//---------------------
+// Type Definitions
+//---------------------
+
+typedef esp_err_t (*HttpReqHandler)(httpd_req_t *req);
+
+typedef struct {
+    httpd_req_t *req;
+    HttpReqHandler handler;
+} HttpdAsyncReq;
+
+typedef struct {
+
+} SystemSettings;
+
+typedef enum {
+    CMD_READING_REQUEST,
+    CMD_SETTINGS_UPDATE,
+} SystemCommandType;
+
+typedef struct {
+    SystemCommandType cmd_type;
+    union {
+        SystemSettings updated_settings;
+    };
+} SystemCommand;
+
+typedef struct {
+    time_t timestamp;
+    float ph;
+    float temp;
+    float humidity;
+    uint32_t tds;
+} SensorReading;
+
+typedef struct {
+    SystemCommandType cmd_type;
+    union {
+        SensorReading reading;
+    };
+} SystemResponse;
+
 //------------------
 // Pin definitions
 //------------------
@@ -38,6 +80,10 @@
 #define I2C1_FREQ_HZ (100 * 1000) // 100kHz
 #define I2C1_SDA 23
 #define I2C1_SCL 22
+
+//---------------
+// Constants
+//---------------
 
 // I2C Address for ADS1115 when ADDR is connected to GND
 #define ADS1115_ADDR ADS111X_ADDR_GND
@@ -59,11 +105,18 @@
 // Max number of WiFi connection attempts
 #define MAX_WIFI_RETRIES 10
 
-// Max number of HTTP requests that can be handled at once
-#define MAX_ASYNC_REQUESTS 2
-
 // Stack size for each task
 #define STACK_SIZE 2048
+
+// Size of a JSON buffer
+#define JSON_BUFFER_SIZE 1024
+
+// Tag used for ESP logging functions
+const char *TAG = "HydroManager";
+
+//------------------
+// Global Variables
+//------------------
 
 // I2C used for sensors
 i2c_dev_t i2c0_dev = {0};
@@ -86,15 +139,27 @@ ssd1306_handle_t ssd1306_dev = NULL;
 // FreeRTOS event group to signal when we are connected
 EventGroupHandle_t g_wifi_event_group;
 
+// Queue of system commands
+QueueHandle_t g_system_command_queue;
+
+// Queue of system responses; one for each async worker and one
+// for a single synchronous worker
+QueueHandle_t g_system_response_queue;
+
 // Current number of WiFi connection attempts
 int g_wifi_retried = 0;
 
-const char *TAG = "HydroManager";
+// Buffer for creating JSON
+char g_json_buffer[JSON_BUFFER_SIZE];
 
 // Much of this code is based off the examples in https://github.com/espressif/esp-idf/tree/master/examples
 //
 // * Wifi connection - https://github.com/espressif/esp-idf/blob/4fc2e5cb95/examples/wifi/getting_started/station/main/station_example_main.c
 // * HTTP server - https://github.com/espressif/esp-idf/blob/master/examples/protocols/http_server/async_handlers/main/main.c
+
+//------------------------
+// WiFi Functions
+//------------------------
 
 void wifi_system_event_handler(void *arg, esp_event_base_t event_base,
         int32_t event_id, void *event_data) {
@@ -121,9 +186,8 @@ void wifi_system_event_handler(void *arg, esp_event_base_t event_base,
     }
 }
 
-// Returns true if WiFi initialized successfully
 // TODO: Find better way to signal if device is currently connected to WiFi AP
-bool wifi_init() {
+void wifi_init() {
     // Initialize WiFi event group
     g_wifi_event_group = xEventGroupCreate();
 
@@ -171,15 +235,16 @@ bool wifi_init() {
      * happened. */
     if (bits & WIFI_CONNECTED_BIT) {
         ESP_LOGI(TAG, "Connected to AP");
-        return true;
     } else if (bits & WIFI_FAIL_BIT) {
         ESP_LOGI(TAG, "Failed to connect to AP");
-        return false;
     } else {
         ESP_LOGE(TAG, "UNEXPECTED EVENT");
-        return false;
     }
 }
+
+//------------------
+// Sensor Functions
+//------------------
 
 float ads1115_read(int mux) {
     if (mux < 0 || mux > 3) {
@@ -206,45 +271,52 @@ float ads1115_read(int mux) {
     return voltage;
 }
 
-void core0_loop(void *pvParameters) {
-    for (;;) {
-        //ads1115_read(0);
-        //ads1115_read(1);
-        //float pressure, temp, humidity;
-        //ESP_ERROR_CHECK(bmp280_read_float(&bme280_dev, &temp, &pressure, &humidity));
-        //TASK_PRINTF("T: %.2f C, P: %.2f Pa, H: %.2f %%\n", temp, pressure, humidity);
-        //TASK_PRINTF("-----------------------------\n");
-        vTaskDelay(pdMS_TO_TICKS(500));
-    }
-}
-
-void core1_loop(void *pvParameters) {
-    TickType_t lastWakeTime = xTaskGetTickCount();
-    for (;;) {
-        //TASK_PRINTF("Goodbye core %d!\n", xPortGetCoreID());
-        vTaskDelayUntil(&lastWakeTime, pdMS_TO_TICKS(1000));
-    }
-}
+//------------------------
+// HTTP Server Functions
+//------------------------
 
 esp_err_t handle_http_api_readings(httpd_req_t *req) {
     ESP_LOGI(TAG, "/api/readings.json");
-    const char resp[] = "URI RESPONSE";
-    httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
+
+    // 15 second timeout
+    const TickType_t timeout = pdMS_TO_TICKS(15000);
+
+    // Send system command to core 0
+    SystemCommand cmd = {
+        .cmd_type = CMD_READING_REQUEST,
+    };
+    if (xQueueSendToBack(g_system_command_queue, &cmd, timeout) == errQUEUE_FULL) {
+        ESP_LOGE(TAG, "System command queue is full");
+        return ESP_ERR_TIMEOUT;
+    }
+
+    // Wait for sensor reading from core 0
+    SystemResponse response;
+    if (xQueueReceive(g_system_response_queue, &response, timeout) == pdFALSE) {
+        ESP_LOGE(TAG, "Timeout while waiting for system response");
+        return ESP_ERR_TIMEOUT;
+    }
+
+    if (response.cmd_type != CMD_READING_REQUEST) {
+        ESP_LOGE(TAG, "System response is an unexepcted type");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    SensorReading *reading = &response.reading;
+    sprintf(g_json_buffer, "{\"ph\":%.2f,\"tds\":%lu,\"temp\":%.1f,\"humidity\":%.1f}",
+            reading->ph, reading->tds, reading->temp, reading->humidity);
+
+    httpd_resp_send(req, g_json_buffer, HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }
 
 httpd_handle_t start_http_server() {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
 
-    httpd_handle_t server = NULL;
+    // Set HTTP server to run only on core 1
+    config.core_id = 1;
 
-    // From https://github.com/espressif/esp-idf/blob/master/examples/protocols/http_server/async_handlers/main/main.c
-    // It is advisable that httpd_config_t->max_open_sockets > MAX_ASYNC_REQUESTS
-    // Why? This leaves at least one socket still available to handle
-    // quick synchronous requests. Otherwise, all the sockets will
-    // get taken by the long async handlers, and your server will no
-    // longer be responsive.
-    config.max_open_sockets = MAX_ASYNC_REQUESTS + 1;
+    httpd_handle_t server = NULL;
 
     // Start http server
     ESP_ERROR_CHECK(httpd_start(&server, &config));
@@ -263,13 +335,70 @@ httpd_handle_t start_http_server() {
     return server;
 }
 
+esp_err_t stop_http_server(httpd_handle_t server) {
+    return httpd_stop(server);
+}
+
+void http_connect_handler(void *arg, esp_event_base_t event_base,
+        int32_t event_id, void *event_data) {
+    httpd_handle_t *server = (httpd_handle_t *)arg;
+    if (*server == NULL) {
+        ESP_LOGI(TAG, "Starting HTTP server");
+        *server = start_http_server();
+    }
+}
+
+void http_disconnect_handler(void *arg, esp_event_base_t event_base,
+        int32_t event_id, void *event_data) {
+    httpd_handle_t *server = (httpd_handle_t *)arg;
+    if (*server) {
+        ESP_LOGI(TAG, "Stopping HTTP server");
+        if (stop_http_server(*server) == ESP_OK) {
+            *server = NULL;
+        } else {
+            ESP_LOGE(TAG, "Failed to stop HTTP server");
+        }
+    }
+}
+
+//-----------------------------
+// System Command Functions
+//-----------------------------
+
+void system_send_reading() {
+    ESP_LOGI(TAG, "Sending system reading to queue");
+
+    float ph = ads1115_read(0) * 4.0f;
+    float tds = ads1115_read(1) * 1000.0f;
+    float temp, humidity, _pressure;
+    ESP_ERROR_CHECK(bmp280_read_float(&bme280_dev, &temp, &_pressure, &humidity));
+    SystemResponse response = {
+        .cmd_type = CMD_READING_REQUEST,
+        .reading = {
+            .ph = ph,
+            .tds = (uint32_t)tds,
+            .temp = temp,
+            .humidity = humidity
+        }
+    };
+    const TickType_t timeout = 10;
+    if (xQueueSendToBack(g_system_response_queue, &response, timeout) == errQUEUE_FULL) {
+        ESP_LOGE(TAG, "Failed to send system response; queue full");
+        return;
+    }
+}
+
+//--------------------------------------------------
+// Initialization, Event loops, and Main Function
+//--------------------------------------------------
+
 void initialize_hardware() {
     // Initialize flash storage
     ESP_ERROR_CHECK(nvs_flash_init());
 
     // Initialize WiFi; blocks until IP is assigned
     // TODO: How should this system function when disconnected from WiFi?
-    bool wifi_connected = wifi_init();
+    wifi_init();
 
     // Initialize I2C0
     ESP_ERROR_CHECK(i2cdev_init());
@@ -313,10 +442,61 @@ void initialize_hardware() {
     ssd1306_draw_string(ssd1306_dev, 70, 16, (const uint8_t *)data_str, 16, 1);
     ESP_ERROR_CHECK(ssd1306_refresh_gram(ssd1306_dev));
 
-    // Start HTTP server if connected to WiFi
-    if (wifi_connected) {
-        ESP_LOGI(TAG, "Starting HTTP server");
-        httpd_handle_t _server = start_http_server();
+    // Create queue of system commands
+    g_system_command_queue = xQueueCreate(1, sizeof(SystemCommand));
+    if (g_system_command_queue == NULL) {
+        ESP_LOGE(TAG, "Failed to create queue for system commands");
+    }
+
+    // Create queue of system responses
+    g_system_response_queue = xQueueCreate(1, sizeof(SystemResponse));
+    if (g_system_response_queue == NULL) {
+        ESP_LOGE(TAG, "Failed to create queue for system responses");
+    }
+
+    // Setup handlers to start HTTP server when WiFi connects and stop it when WiFi
+    // disconnects
+    httpd_handle_t http_server;
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
+                &http_connect_handler, &http_server));
+    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED,
+                &http_disconnect_handler, &http_server));
+
+    // Initialize HTTP server for the first time
+    http_server = start_http_server();
+}
+
+void core0_loop(void *pvParameters) {
+    for (;;) {
+        if (uxQueueMessagesWaiting(g_system_command_queue) > 0) {
+            SystemCommand cmd;
+            const TickType_t timeout = 10;
+            if (xQueueReceive(g_system_command_queue, &cmd, timeout) == pdFALSE) {
+                ESP_LOGE(TAG, "Timeout while receiving system command");
+                continue;
+            }
+
+            ESP_LOGI(TAG, "Received system command");
+
+            switch (cmd.cmd_type) {
+                case CMD_READING_REQUEST:
+                    system_send_reading();
+                    break;
+                default:
+                    ESP_LOGE(TAG, "Unexpected system command type");
+                    break;
+            }
+        }
+
+        vTaskDelay(10);
+    }
+}
+
+void core1_loop(void *pvParameters) {
+    TickType_t lastWakeTime = xTaskGetTickCount();
+    for (;;) {
+        //TASK_PRINTF("Goodbye core %d!\n", xPortGetCoreID());
+        vTaskDelayUntil(&lastWakeTime, pdMS_TO_TICKS(1000));
     }
 }
 
