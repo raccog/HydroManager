@@ -29,43 +29,48 @@
 // Type Definitions
 //---------------------
 
-typedef esp_err_t (*HttpReqHandler)(httpd_req_t *req);
+struct StructVersion {
+    uint8_t major;
+    uint8_t minor;
+};
 
-typedef struct {
-    httpd_req_t *req;
-    HttpReqHandler handler;
-} HttpdAsyncReq;
+struct SystemSettings {
+    uint32_t magic;
+    struct StructVersion version;
+    uint8_t auto_ph;
+    uint8_t refill_mode;
+    uint32_t ph_stabilize_interval;
+    uint32_t ph_dose_length;
+    uint32_t refill_dose_length;
+    uint32_t crc32;
+};
 
-typedef struct {
-
-} SystemSettings;
-
-typedef enum {
+enum SystemCommandType {
     CMD_READING_REQUEST,
     CMD_SETTINGS_UPDATE,
-} SystemCommandType;
+};
 
-typedef struct {
-    SystemCommandType cmd_type;
+struct SystemCommand {
+    enum SystemCommandType cmd_type;
     union {
-        SystemSettings updated_settings;
+        struct SystemSettings updated_settings;
     };
-} SystemCommand;
+};
 
-typedef struct {
+struct SensorReading {
     time_t timestamp;
     float ph;
     float temp;
     float humidity;
     uint32_t tds;
-} SensorReading;
+};
 
-typedef struct {
-    SystemCommandType cmd_type;
+struct SystemResponse {
+    enum SystemCommandType cmd_type;
     union {
-        SensorReading reading;
+        struct SensorReading reading;
     };
-} SystemResponse;
+};
 
 //------------------
 // Pin definitions
@@ -293,7 +298,7 @@ esp_err_t handle_http_api_readings(httpd_req_t *req) {
     const TickType_t timeout = pdMS_TO_TICKS(15000);
 
     // Send system command to core 0
-    SystemCommand cmd = {
+    struct SystemCommand cmd = {
         .cmd_type = CMD_READING_REQUEST,
     };
     if (xQueueSendToBack(g_system_command_queue, &cmd, timeout) == errQUEUE_FULL) {
@@ -302,7 +307,7 @@ esp_err_t handle_http_api_readings(httpd_req_t *req) {
     }
 
     // Wait for sensor reading from core 0
-    SystemResponse response;
+    struct SystemResponse response;
     if (xQueueReceive(g_system_response_queue, &response, timeout) == pdFALSE) {
         ESP_LOGE(TAG, "Timeout while waiting for system response");
         return ESP_ERR_TIMEOUT;
@@ -313,7 +318,7 @@ esp_err_t handle_http_api_readings(httpd_req_t *req) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    SensorReading *reading = &response.reading;
+    struct SensorReading *reading = &response.reading;
     sprintf(g_json_buffer, "{\"ph\":%.2f,\"tds\":%lu,\"temp\":%.1f,\"humidity\":%.1f}",
             reading->ph, reading->tds, reading->temp, reading->humidity);
 
@@ -404,7 +409,7 @@ void system_send_reading() {
     float tds = ads1115_read(1) * 1000.0f;
     float temp, humidity, _pressure;
     ESP_ERROR_CHECK(bmp280_read_float(&bme280_dev, &temp, &_pressure, &humidity));
-    SystemResponse response = {
+    struct SystemResponse response = {
         .cmd_type = CMD_READING_REQUEST,
         .reading = {
             .ph = ph,
@@ -475,13 +480,13 @@ void initialize_hardware() {
     ESP_ERROR_CHECK(ssd1306_refresh_gram(ssd1306_dev));
 
     // Create queue of system commands
-    g_system_command_queue = xQueueCreate(1, sizeof(SystemCommand));
+    g_system_command_queue = xQueueCreate(1, sizeof(struct SystemCommand));
     if (g_system_command_queue == NULL) {
         ESP_LOGE(TAG, "Failed to create queue for system commands");
     }
 
     // Create queue of system responses
-    g_system_response_queue = xQueueCreate(1, sizeof(SystemResponse));
+    g_system_response_queue = xQueueCreate(1, sizeof(struct SystemResponse));
     if (g_system_response_queue == NULL) {
         ESP_LOGE(TAG, "Failed to create queue for system responses");
     }
@@ -510,7 +515,7 @@ void core0_loop(void *pvParameters) {
         // Check for system command
         if (uxQueueMessagesWaiting(g_system_command_queue) > 0) {
             // Try to get command from queue
-            SystemCommand cmd;
+            struct SystemCommand cmd;
             const TickType_t timeout = 10;
             if (xQueueReceive(g_system_command_queue, &cmd, timeout) == pdFALSE) {
                 ESP_LOGE(TAG, "Timeout while receiving system command");
