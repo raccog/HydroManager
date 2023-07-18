@@ -116,11 +116,14 @@ struct SystemResponse {
 // Use +-4.096v gain; there will be no signals above 3.3v or below 0v
 #define ADS1115_GAIN ADS111X_GAIN_4V096
 
-// Number of ADCs
-#define MAX_ADCS 4
+// Readings from the ADS1115 should take a maximux of 40 milliseconds
+#define ADS1115_TIMEOUT (pdMS_TO_TICKS(40 * 2))
 
 // I2C address for BME280 when SDO is connected to GND
 #define BME280_ADDR BMP280_I2C_ADDRESS_0
+
+// Readings from the BME280 should take a maximum of 10 milliseconds
+#define BME280_TIMEOUT (pdMS_TO_TICKS(10 * 2))
 
 /* The event group allows multiple bits for each event, but we only care about two events:
  * - we are connected to the AP with an IP
@@ -189,7 +192,11 @@ QueueHandle_t g_system_response_queue;
 // Current number of WiFi connection attempts
 int g_wifi_retried = 0;
 
+// Mutex for reading from ADC
 SemaphoreHandle_t g_adc_mutex;
+
+// Mutex for reading from BME280
+SemaphoreHandle_t g_bme280_mutex;
 
 // Much of this code is based off the examples in https://github.com/espressif/esp-idf/tree/master/examples
 //
@@ -285,7 +292,7 @@ void wifi_init() {
 // Sensor Functions
 //------------------
 
-esp_err_t adc_read(int mux, int16_t *raw_out, TickType_t timeout) {
+esp_err_t adc_read(int mux, int16_t *raw_out) {
     if (mux < 0 || mux > 3) {
         ESP_LOGE(TAG, "adc_read: invalid mux (%d)", mux);
         return ESP_ERR_INVALID_STATE;
@@ -293,7 +300,7 @@ esp_err_t adc_read(int mux, int16_t *raw_out, TickType_t timeout) {
 
     ESP_LOGI(TAG, "Start ADC reading from mux %d", mux);
 
-    if (xSemaphoreTake(g_adc_mutex, timeout) == pdFALSE) {
+    if (xSemaphoreTake(g_adc_mutex, ADS1115_TIMEOUT) == pdFALSE) {
         return ESP_ERR_TIMEOUT;
     }
 
@@ -316,6 +323,23 @@ esp_err_t adc_read(int mux, int16_t *raw_out, TickType_t timeout) {
 
 float adc_raw_to_volts(int16_t raw) {
     return ads111x_gain_values[ADS1115_GAIN] / ADS111X_MAX_VALUE * raw;
+}
+
+esp_err_t bme280_read(float *temp, float *humidity) {
+    ESP_LOGI(TAG, "Start BME280 reading");
+
+    if (xSemaphoreTake(g_bme280_mutex, BME280_TIMEOUT) == pdFALSE) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    float _pressure;
+    ESP_ERROR_CHECK(bmp280_read_float(&bme280_dev, temp, &_pressure, humidity));
+
+    xSemaphoreGive(g_bme280_mutex);
+
+    ESP_LOGI(TAG, "Finished BME280 reading: T(%f C), H(%f %%)", *temp, *humidity);
+
+    return ESP_OK;
 }
 
 //------------------------
@@ -442,16 +466,15 @@ void wifi_disconnect_handler(void *arg, esp_event_base_t event_base,
 void system_send_reading() {
     ESP_LOGI(TAG, "Sending system reading to queue");
 
-    TickType_t reading_timeout = pdMS_TO_TICKS(1000);
     int16_t ph_raw, tds_raw;
-    ESP_ERROR_CHECK(adc_read(0, &ph_raw, reading_timeout));
-    ESP_ERROR_CHECK(adc_read(1, &tds_raw, reading_timeout));
+    ESP_ERROR_CHECK(adc_read(0, &ph_raw));
+    ESP_ERROR_CHECK(adc_read(1, &tds_raw));
 
     float ph = adc_raw_to_volts(ph_raw) * 4.0f;
     float tds = adc_raw_to_volts(tds_raw) * 1000.0f;
 
-    float temp, humidity, _pressure;
-    ESP_ERROR_CHECK(bmp280_read_float(&bme280_dev, &temp, &_pressure, &humidity));
+    float temp, humidity;
+    ESP_ERROR_CHECK(bme280_read(&temp, &humidity));
     // TODO: Figure out how to round floats without using division.
     // ESP32s implement floating point division in software and it is not precise at all.
     // This makes rounding to even 1 or 2 decimal digits impossible using a simple round()
@@ -532,6 +555,12 @@ void initialize_resources() {
     g_adc_mutex = xSemaphoreCreateMutex();
     if (g_adc_mutex == NULL) {
         ESP_LOGE(TAG, "Failed to create mutex for ADC");
+    }
+
+    // Create mutex for BME280
+    g_bme280_mutex = xSemaphoreCreateMutex();
+    if (g_bme280_mutex == NULL) {
+        ESP_LOGE(TAG, "Failed to create mutex for BME280");
     }
 
     // Create queue of system commands
