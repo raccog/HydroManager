@@ -116,6 +116,9 @@ struct SystemResponse {
 // Use +-4.096v gain; there will be no signals above 3.3v or below 0v
 #define ADS1115_GAIN ADS111X_GAIN_4V096
 
+// Number of ADCs
+#define MAX_ADCS 4
+
 // I2C address for BME280 when SDO is connected to GND
 #define BME280_ADDR BMP280_I2C_ADDRESS_0
 
@@ -185,6 +188,8 @@ QueueHandle_t g_system_response_queue;
 
 // Current number of WiFi connection attempts
 int g_wifi_retried = 0;
+
+SemaphoreHandle_t g_adc_mutex;
 
 // Much of this code is based off the examples in https://github.com/espressif/esp-idf/tree/master/examples
 //
@@ -280,29 +285,37 @@ void wifi_init() {
 // Sensor Functions
 //------------------
 
-float ads1115_read(int mux) {
+esp_err_t adc_read(int mux, int16_t *raw_out, TickType_t timeout) {
     if (mux < 0 || mux > 3) {
-        ESP_LOGE(TAG, "ads1115_read: invalid mux (%d)", mux);
+        ESP_LOGE(TAG, "adc_read: invalid mux (%d)", mux);
+        return ESP_ERR_INVALID_STATE;
     }
 
-    // Start conversion with selected mux
+    ESP_LOGI(TAG, "Start ADC reading from mux %d", mux);
+
+    if (xSemaphoreTake(g_adc_mutex, timeout) == pdFALSE) {
+        return ESP_ERR_TIMEOUT;
+    }
+
     ESP_ERROR_CHECK(ads111x_set_input_mux(&i2c0_dev, ADS111X_MUX_0_GND + mux));
     ESP_ERROR_CHECK(ads111x_start_conversion(&i2c0_dev));
 
-    // Wait for conversion
     bool busy = true;
     while (busy) {
         ESP_ERROR_CHECK(ads111x_is_busy(&i2c0_dev, &busy));
     }
 
-    // Read conversion
-    int16_t raw = 0;
-    ESP_ERROR_CHECK(ads111x_get_value(&i2c0_dev, &raw));
-    float voltage = ads111x_gain_values[ADS1115_GAIN] / ADS111X_MAX_VALUE * raw;
+    ESP_ERROR_CHECK(ads111x_get_value(&i2c0_dev, raw_out));
 
-    ESP_LOGI(TAG, "ADS1115 A%d: raw (%d), %.04f volts", mux, raw, voltage);
+    xSemaphoreGive(g_adc_mutex);
 
-    return voltage;
+    ESP_LOGI(TAG, "Finished ADC reading on mux %d; got raw value %d", mux, *raw_out);
+
+    return ESP_OK;
+}
+
+float adc_raw_to_volts(int16_t raw) {
+    return ads111x_gain_values[ADS1115_GAIN] / ADS111X_MAX_VALUE * raw;
 }
 
 //------------------------
@@ -429,8 +442,14 @@ void wifi_disconnect_handler(void *arg, esp_event_base_t event_base,
 void system_send_reading() {
     ESP_LOGI(TAG, "Sending system reading to queue");
 
-    float ph = ads1115_read(0) * 4.0f;
-    float tds = ads1115_read(1) * 1000.0f;
+    TickType_t reading_timeout = pdMS_TO_TICKS(1000);
+    int16_t ph_raw, tds_raw;
+    ESP_ERROR_CHECK(adc_read(0, &ph_raw, reading_timeout));
+    ESP_ERROR_CHECK(adc_read(1, &tds_raw, reading_timeout));
+
+    float ph = adc_raw_to_volts(ph_raw) * 4.0f;
+    float tds = adc_raw_to_volts(tds_raw) * 1000.0f;
+
     float temp, humidity, _pressure;
     ESP_ERROR_CHECK(bmp280_read_float(&bme280_dev, &temp, &_pressure, &humidity));
     // TODO: Figure out how to round floats without using division.
@@ -506,6 +525,14 @@ void initialize_hardware() {
     sprintf(data_str, "C STR");
     ssd1306_draw_string(ssd1306_dev, 70, 16, (const uint8_t *)data_str, 16, 1);
     ESP_ERROR_CHECK(ssd1306_refresh_gram(ssd1306_dev));
+}
+
+void initialize_resources() {
+    // Create mutex for ADC
+    g_adc_mutex = xSemaphoreCreateMutex();
+    if (g_adc_mutex == NULL) {
+        ESP_LOGE(TAG, "Failed to create mutex for ADC");
+    }
 
     // Create queue of system commands
     g_system_command_queue = xQueueCreate(1, sizeof(struct SystemCommand));
@@ -518,7 +545,9 @@ void initialize_hardware() {
     if (g_system_response_queue == NULL) {
         ESP_LOGE(TAG, "Failed to create queue for system responses");
     }
+}
 
+void initialize_networking() {
     // Setup handlers to start HTTP server when WiFi connects and stop it when WiFi
     // disconnects
     httpd_handle_t http_server;
@@ -538,7 +567,7 @@ void initialize_hardware() {
     http_server = start_http_server();
 }
 
-void core0_loop(void *pvParameters) {
+void system_control_task(void *pvParameters) {
     for (;;) {
         // Check for system command
         if (uxQueueMessagesWaiting(g_system_command_queue) > 0) {
@@ -570,6 +599,8 @@ void core0_loop(void *pvParameters) {
 void app_main(void)
 {
     initialize_hardware();
+    initialize_resources();
+    initialize_networking();
 
-    xTaskCreatePinnedToCore(&core0_loop, "core0_loop", STACK_SIZE, NULL, 1, NULL, 0);
+    xTaskCreatePinnedToCore(&system_control_task, "system_control", STACK_SIZE, NULL, 1, NULL, 0);
 }
