@@ -43,7 +43,6 @@ struct SystemSettings {
     uint32_t ph_stabilize_interval;
     uint32_t ph_dose_length;
     uint32_t refill_dose_length;
-    uint32_t crc32;
 };
 
 enum SystemCommandType {
@@ -71,6 +70,12 @@ struct SystemResponse {
     union {
         struct SensorReading reading;
     };
+};
+
+struct PhCalibration {
+    float ph_7;
+    float ph_4;
+    float ph_10;
 };
 
 //------------------
@@ -177,6 +182,13 @@ struct SystemSettings g_system_settings = {
     .ph_stabilize_interval = 30 * 60 * 1000,    // 30 minutes
     .ph_dose_length = 1000,                     // 1 second
     .refill_dose_length = 30 * 1000             // 30 seconds
+};
+
+// Global pH calibration
+struct PhCalibration g_ph_cal = {
+    .ph_7 = 1500.0f,
+    .ph_4 = 2030.0f,
+    .ph_10 = 975.0f,
 };
 
 // FreeRTOS event group to signal when we are connected
@@ -548,6 +560,39 @@ void initialize_hardware() {
     sprintf(data_str, "C STR");
     ssd1306_draw_string(ssd1306_dev, 70, 16, (const uint8_t *)data_str, 16, 1);
     ESP_ERROR_CHECK(ssd1306_refresh_gram(ssd1306_dev));
+
+    // Open flash storage handler
+    nvs_handle_t nvs_handle;
+    ESP_ERROR_CHECK(nvs_open("HydroManager", NVS_READWRITE, &nvs_handle));
+
+    // Try to retrieve pH meter calibration
+    size_t ph_cal_size = sizeof(struct PhCalibration);
+    esp_err_t ph_cal_flash_result = nvs_get_blob(nvs_handle, "PhCalibration",
+            (void *)&g_ph_cal, &ph_cal_size);
+    if (ph_cal_flash_result != ESP_OK) {
+        // Write default ph calibration values if they dont exist
+        ESP_ERROR_CHECK(nvs_set_blob(nvs_handle, "PhCalibration",
+                    (const void *)&g_ph_cal, sizeof(struct PhCalibration)));
+        ESP_LOGI(TAG, "Cannot load ph calibration; Wrote default to flash");
+    } else {
+        ESP_LOGI(TAG, "Loaded ph calibration");
+    }
+
+    // Try to retrieve system settings
+    size_t system_settings_size = sizeof(struct SystemSettings);
+    esp_err_t system_settings_result = nvs_get_blob(nvs_handle, "SystemSettings",
+            (void *)&g_system_settings, &system_settings_size);
+    ESP_ERROR_CHECK(system_settings_result);
+    if (system_settings_result != ESP_OK) {
+        // Write default system settings if they dont exist
+        ESP_ERROR_CHECK(nvs_set_blob(nvs_handle, "SystemSettings",
+                    (const void *)&g_system_settings, sizeof(struct SystemSettings)));
+        ESP_LOGI(TAG, "Cannot load system settings; Wrote default to flash");
+    } else {
+        ESP_LOGI(TAG, "Loaded system settings");
+    }
+
+    nvs_close(nvs_handle);
 }
 
 void initialize_resources() {
