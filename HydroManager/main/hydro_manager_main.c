@@ -14,7 +14,7 @@
 #include <driver/i2c.h>
 #include <ads111x.h>
 #include <bmp280.h>
-#include "ssd1306.h"
+#include <ssd1306.h>
 #include <nvs_flash.h>
 #include <esp_netif.h>
 #include <esp_netif_sntp.h>
@@ -22,6 +22,7 @@
 #include <esp_log.h>
 #include <esp_wifi.h>
 #include <esp_http_server.h>
+#include <cJSON.h>
 
 //#include <esp_system.h>
 
@@ -108,7 +109,7 @@ struct SystemResponse {
 #define NTP_SERVER_ADDR "pool.ntp.org"
 
 // Timeout when waiting for NTP response
-#define NTP_TIMEOUT (pdMS_TO_TICKS(10000))
+#define NTP_TIMEOUT (pdMS_TO_TICKS(30000))
 
 // I2C Address for ADS1115 when ADDR is connected to GND
 #define ADS1115_ADDR ADS111X_ADDR_GND
@@ -132,9 +133,6 @@ struct SystemResponse {
 
 // Stack size for each task
 #define STACK_SIZE 2048
-
-// Size of a JSON buffer
-#define JSON_BUFFER_SIZE 1024
 
 // Tag used for ESP logging functions
 const char *TAG = "HydroManager";
@@ -187,9 +185,6 @@ QueueHandle_t g_system_response_queue;
 
 // Current number of WiFi connection attempts
 int g_wifi_retried = 0;
-
-// Buffer for creating JSON
-char g_json_buffer[JSON_BUFFER_SIZE];
 
 // Much of this code is based off the examples in https://github.com/espressif/esp-idf/tree/master/examples
 //
@@ -341,12 +336,17 @@ esp_err_t handle_http_api_readings(httpd_req_t *req) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    struct SensorReading *reading = &response.reading;
-    sprintf(g_json_buffer, "{\"time\":%llu,\"ph\":%.2f,\"tds\":%lu,\"temp\":%.1f,\"humidity\":%.1f}",
-            time(NULL), reading->ph, reading->tds, reading->temp, reading->humidity);
+    // Serialize JSON response
+    cJSON *json = cJSON_CreateObject();
+    cJSON_AddNumberToObject(json, "time", time(NULL));
+    cJSON_AddNumberToObject(json, "ph", response.reading.ph);
+    cJSON_AddNumberToObject(json, "tds", response.reading.tds);
+    cJSON_AddNumberToObject(json, "temp", response.reading.temp);
+    cJSON_AddNumberToObject(json, "humidity", response.reading.humidity);
+    char *json_response = cJSON_Print(json);
 
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, g_json_buffer, HTTPD_RESP_USE_STRLEN);
+    httpd_resp_send(req, json_response, HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }
 
@@ -433,6 +433,10 @@ void system_send_reading() {
     float tds = ads1115_read(1) * 1000.0f;
     float temp, humidity, _pressure;
     ESP_ERROR_CHECK(bmp280_read_float(&bme280_dev, &temp, &_pressure, &humidity));
+    // TODO: Figure out how to round floats without using division.
+    // ESP32s implement floating point division in software and it is not precise at all.
+    // This makes rounding to even 1 or 2 decimal digits impossible using a simple round()
+    // implementation.
     struct SystemResponse response = {
         .cmd_type = CMD_READING_REQUEST,
         .reading = {
