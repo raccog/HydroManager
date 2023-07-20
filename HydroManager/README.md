@@ -1,14 +1,18 @@
 # Hydroponic Manager
 
-The Hydroponic Manager is a program that runs continuously on a microcontroller. It performs
-the following functions:
+The Hydroponic Manager is a program that runs on a microcontroller to help with managing
+an indoor hydroponic reservoir. It performs actions automatically that would need to be
+done manually otherwise. This includes stabilizing the pH of a reservoir within a
+specified range and refilling the main reservoir from an external reservoir. For data
+collection, it also records sensor measurements and logs all events so they can be
+stored on a database server (see `HydroCollector` in the root directory).
 
-* Stabilize pH in a specified range
-* Provide sensor data and events over HTTP
+Although this program has been designed to manage a deep water culture (DWC) hydroponic
+system, it could be repurposed for other hydroponic techniques.
 
-Eventually, it will also be able to refill a hydroponic reservoir when it's water level is
-getting low. The current HydroManager is implemented on an ESP8266, which does not have
-enough pins for this. See the next section for more details.
+The current HydroManager is implemented on an ESP8266, which does not have
+enough pins for refilling reservoirs. Future versions will run on ESP32s,
+which have more than enough pins for now. See the next section for more details.
 
 ## Problems of Version 0.x
 
@@ -20,6 +24,7 @@ enough pins for this. See the next section for more details.
 * No PPM meter; there is only 1 ADC
 * pH range is hardcoded
 * pH measurement error is also hardcoded
+* Most error conditions are simply ignored; the system is very unstable
 
 All of these will be added in version 1.0
 
@@ -29,9 +34,8 @@ This will be a large change, as I plan to switch the microcontroller from an ESP
 an ESP32. This gives the advantages of many more pins and also 2 cores instead of 1.
 
 I also plan to move away from Arduino and use the Espressif ESP32 SDK instead. This will
-require an entire rewrite of the hydroponic manager system. It will also require me to
-replace some libraries that don't work without Arduino; such as a JSON parser. I also
-plan to use an RTOS to prevent any one task from locking out the entire system.
+require an entire rewrite of the hydroponic manager system. I also
+plan to use FreeRTOS to prevent any one task from locking out the entire system.
 
 ## Bill Of Materials
 
@@ -50,13 +54,14 @@ Here is a list of all the hardware used for the HydroManager Version 1.0:
 * Red LED + 330 Ohm Resistor
 * 2x Push Buttons
 * 128x64 Pixel OLED with SSD1306 Driver
+* DS3231 RTC with CR2032 button battery
 
 ## Hydroponic Manager Program Description
 
 Version 1.0 of the Hydroponic Manager runs on an ESP32-WROOM and uses the ESP32-SDK
-by Espressif. With two cores on the ESP32, 1 will be used for the main sensor and pump
-tasks and the other will be used for the HTTP server, a status display, and connected
-to a few input buttons.
+by Espressif. With two cores on the ESP32, 1 is be used purely for the main sensor and pump
+tasks and the other is used for the HTTP server, a status display, and a
+few input buttons. FreeRTOS is used to manage running tasks.
 
 ### Pins
 
@@ -82,6 +87,8 @@ the esp-idf menuconfig.
 
 ### Types
 
+TODO: Remove these sections once they are implemented in version 1.0
+
 The following types have been declared for this program:
 
 #### Version
@@ -104,7 +111,6 @@ struct ManagerVersion {
 Global settings for the manager. These can be changed during runtime.
 
 ```c
-// sizeof(ManagerSettings) == 24
 struct ManagerSettings {
     uint32_t magic;
     struct ManagerVersion version;
@@ -131,7 +137,6 @@ struct ManagerSettings {
 A recording of an event where one of the pumps was pulsed by the system.
 
 ```c
-// sizeof(PumpPulseEvent) == 24
 struct PumpPulseEvent {
     uint32_t magic;
     struct ManagerVersion version;
@@ -275,6 +280,17 @@ Tasks will be managed by the FreeRTOS scheduler.
 * System Toggle
 * Display Toggle
 * Display Control
+
+#### System Control
+
+This task is responsible for communicating with the HTTP server task and
+performing any actions requested over HTTP.
+
+It can perform the following actions
+
+* Read from the various sensors to provide data over HTTP
+* Overwrite the current system settings
+* Save the current system settings to flash memory as the default settings
 
 ### FreeRTOS Resources
 
