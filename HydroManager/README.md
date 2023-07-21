@@ -80,10 +80,19 @@ the esp-idf menuconfig.
 * System Status LED: GPIO32
 * System Toggle Button: GPIO35
 * Display Toggle Buttoin: GPIO34
-* Overflow Sensor 0: GPIO15
-* Overflow Sensor 1: GPIO2
 * Refill Sensor: GPIO4
 * External Reservoir Sensor: GPIO16
+
+### Overflow Sensors
+
+Two of the water level sensors will be wired directly into the relay module
+input pins. Note that the sensors provide a high signal when underwater and
+a high impedance signal when out of water. When the relay is configured to
+turn off the pumps on a high input signal, the pumps will immediately turn off
+when the overflow sensors are activated.
+
+These sensors are positioned at the top of the reservoir, around one inch
+below the top. There are two sensors to provide redundancy in case one fails.
 
 ### Types
 
@@ -280,6 +289,7 @@ Tasks will be managed by the FreeRTOS scheduler.
 * System Toggle
 * Display Toggle
 * Display Control
+* WiFi Events
 
 #### System Control
 
@@ -292,6 +302,36 @@ It can perform the following actions
 * Overwrite the current system settings
 * Save the current system settings to flash memory as the default settings
 
+#### Stabilize pH
+
+This task is responsible for keeping the pH of a reservoir within a
+specified range. It only performs this action when `auto_ph` mode is on.
+
+Every `ph_stabilize_interval` milliseconds, the pH is measured and checked
+to see if it's in range. If it's not in range, a pump is activated for
+`ph_dose_length` milliseconds to provide pH up or pH down to the reservoir.
+
+#### Refill Reservoir
+
+This task is responsible for turning the refill pump on and off depending on
+the current refill mode. There are 3 modes: off, refill, and circulate. When
+off, this task does nothing.
+
+When in refill mode, it checks the refill sensor
+every `refill_interval` milliseconds to see if the reservoir needs water. If
+it does, then it turns on the refill pump for `refill_dose_length` milliseconds.
+
+When in circulate mode, it keeps the pump on continuously (unless the overflow
+sensor activates). This mode is designed for a pump whose input and output are
+connected to the same reservoir. When constantly running, this provides water
+circulation in the reservoir.
+
+#### HTTP Server
+
+This task is responsible for responding to HTTP requests and communicating with
+the System Control task when necessary. It provides HTTP endpoints that can be
+used to read sensor data, get event logs, and update system settings.
+
 ### FreeRTOS Resources
 
 These resources are used to communicate between FreeRTOS tasks.
@@ -303,3 +343,9 @@ These resources are used to communicate between FreeRTOS tasks.
 * tds meter mutex
 * bme280 mutex
 
+#### Wifi Connection Event Group
+
+This event group describes the most recent WiFi connection state. It is only
+written to by the WiFi Event task when it receives events from the WiFi modem.
+It can be read by any other part of the program to see whether the device is
+currently connected to WiFi.
